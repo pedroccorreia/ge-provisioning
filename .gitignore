@@ -1,0 +1,36 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Credentials & Service Account Keys
+*key*.json
+*credentials*.json
+token*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Scratch / Local Artifacts
+discovery_v1beta.json
+
+# OS & Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
