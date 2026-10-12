@@ -2,7 +2,7 @@
 set -e
 
 # Load configurations
-BOOTSTRAP_PROJECT="affiliates-bootstrap"
+BOOTSTRAP_PROJECT="${BOOTSTRAP_PROJECT:-affiliates-bootstrap}"
 SA_NAME="gemini-provisioner"
 SA_EMAIL="${SA_NAME}@${BOOTSTRAP_PROJECT}.iam.gserviceaccount.com"
 

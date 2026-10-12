@@ -1,32 +1,27 @@
 # Gemini Enterprise License Allocation & Troubleshooting Guide
 
-This document captures the complete findings, architectural design, Google API requirements, and actionable next steps for managing Gemini Enterprise licenses across the 7 Australian affiliate GCP projects.
+This document captures the complete findings, architectural design, Google API requirements, and actionable next steps for managing Gemini Enterprise licenses across customer environment GCP projects (e.g. `prod` and `non-prod`).
 
 ---
 
 ## 1. Executive Summary & Configuration
 
 ### Subscription Overview
-* **Subscription Name**: `affiliate_main_reservation`
+* **Subscription Name**: `customer_main_reservation`
 * **Subscription ID**: `05eab18d-9cd5-4ba6-966f-ff796c7d27a8`
 * **Billing Account License Config ID**: `ca1a2f23-797f-4cf7-ab6f-74fd5f3ca651`
 * **Billing Account ID**: `0111AA-12FED7-0F6152`
 * **Subscription Tier**: `Gemini Enterprise Standard`
 * **Total Subscription Capacity**: 5 seats
-* **Target Quota Distribution**: 1 seat per project for 5 affiliate projects, skipping 2 projects (Sandy Bay & Fannie Bay)
+* **Target Quota Distribution**: Allocated across customer environments (e.g., 4 seats for `prod`, 1 seat for `non-prod`)
 
-### Affiliate Quota Allocations
+### Customer Environment Quota Allocations
 Configured in [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/affiliate-provisioning/config/license_allocations.json):
 
-| Affiliate Name | Project ID | Project Number | Allocated Quota | Status |
+| Environment | Project ID | Project Number | Allocated Quota | Status |
 | :--- | :--- | :---: | :---: | :---: |
-| **Double Bay** | `rwg-double-bay` | `1067043213672` | 1 seat | Active |
-| **Toorak** | `rwg-toorak` | `193224435442` | 1 seat | Active |
-| **New Farm** | `rwg-new-farm` | `710375558724` | 1 seat | Active |
-| **Mosman Park** | `rwg-mosman-park` | `1009149352390` | 1 seat | Active |
-| **Unley Park** | `rwg-unley-park` | `316281253226` | 1 seat | Active |
-| **Sandy Bay** | `rwg-sandy-bay` | `98284566703` | 0 seats | *Skipped* |
-| **Fannie Bay** | `rwg-fannie-bay` | `73146909050` | 0 seats | *Skipped* |
+| **Production** | `rwg-prod` | `1067043213672` | 4 seats | Active |
+| **Non-Production** | `rwg-non-prod` | `193224435442` | 1 seat | Active |
 
 ---
 
@@ -39,26 +34,17 @@ flowchart TD
     end
 
     subgraph Distribution["distributeLicenseConfig (scripts/allocate_licenses.py --distribute)"]
-        D1["Distribute 1 seat"]
+        D1["Distribute 4 seats"]
         D2["Distribute 1 seat"]
-        D3["Distribute 1 seat"]
-        D4["Distribute 1 seat"]
-        D5["Distribute 1 seat"]
     end
 
-    subgraph Projects["Affiliate Projects (User Store Auto-Register: ON)"]
-        P1["Double Bay (1067043213672)"]
-        P2["Toorak (193224435442)"]
-        P3["New Farm (710375558724)"]
-        P4["Mosman Park (1009149352390)"]
-        P5["Unley Park (316281253226)"]
+    subgraph Projects["Customer Environment Projects (User Store Auto-Register: ON)"]
+        P1["Production (rwg-prod)"]
+        P2["Non-Production (rwg-non-prod)"]
     end
 
     Sub --> D1 --> P1
     Sub --> D2 --> P2
-    Sub --> D3 --> P3
-    Sub --> D4 --> P4
-    Sub --> D5 --> P5
 ```
 
 ---
@@ -86,14 +72,14 @@ python3 scripts/allocate_licenses.py --configure-auto-register
 ```
 
 ### 3. Verify Active Allocations & Status
-Displays the real-time license configurations and assigned quota across all affiliate projects:
+Displays the real-time license configurations and assigned quota across all customer environment projects:
 ```bash
 python3 scripts/allocate_licenses.py --list
 ```
 
 ### 4. Verify End-User Search Access
-Log in to the affiliate search application using an Incognito window:
-* **Double Bay Console**: [Vertex AI Search - Double Bay App](https://console.cloud.google.com/gen-app-builder/engines?project=rwg-double-bay)
+Log in to the customer search application using an Incognito window:
+* **Production Console**: [Vertex AI Search - Production App](https://console.cloud.google.com/gen-app-builder/engines?project=rwg-prod)
 
 ---
 

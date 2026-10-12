@@ -7,53 +7,21 @@
   "location": "global",
   "allocations": [
     {
-      "project_id": "rwg-double-bay",
+      "project_id": "rwg-prod",
       "project_number": "1067043213672",
-      "affiliate_name": "Double Bay",
-      "seat_count": 1,
+      "environment": "prod",
+      "environment_name": "Production",
+      "seat_count": 4,
       "status": "active"
     },
     {
-      "project_id": "rwg-toorak",
+      "project_id": "rwg-non-prod",
       "project_number": "193224435442",
-      "affiliate_name": "Toorak",
+      "environment": "non-prod",
+      "environment_name": "Non-Production",
       "seat_count": 1,
       "status": "active"
-    },
-    {
-      "project_id": "rwg-new-farm",
-      "project_number": "710375558724",
-      "affiliate_name": "New Farm",
-      "seat_count": 1,
-      "status": "active"
-    },
-    {
-      "project_id": "rwg-mosman-park",
-      "project_number": "1009149352390",
-      "affiliate_name": "Mosman Park",
-      "seat_count": 1,
-      "status": "active"
-    },
-    {
-      "project_id": "rwg-unley-park",
-      "project_number": "316281253226",
-      "affiliate_name": "Unley Park",
-      "seat_count": 1,
-      "status": "active"
-    },
-    {
-      "project_id": "rwg-sandy-bay",
-      "project_number": "98284566703",
-      "affiliate_name": "Sandy Bay",
-      "seat_count": 0,
-      "status": "skipped"
-    },
-    {
-      "project_id": "rwg-fannie-bay",
-      "project_number": "73146909050",
-      "affiliate_name": "Fannie Bay",
-      "seat_count": 0,
-      "status": "skipped"
     }
   ]
 }
+

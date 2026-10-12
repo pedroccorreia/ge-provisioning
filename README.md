@@ -1,11 +1,12 @@
-# Gemini Enterprise Affiliate Provisioning IaC
+# Gemini Enterprise Customer Provisioning IaC
 
-This repository contains the Terraform Infrastructure as Code (IaC) configuration to set up Gemini Enterprise integration (Vertex AI Search) with Google Workspace Gmail and Google Calendar connectors, alongside Google Workspace Groups for Australian affiliates.
+This repository contains the Terraform Infrastructure as Code (IaC) configuration to set up Gemini Enterprise integration (Vertex AI Search) with Google Workspace Gmail and Google Calendar connectors, alongside Google Workspace Groups for a single customer across configurable environments (such as `non-prod` and `prod`).
 
 ## Architecture Overview
 
-- **GCP Projects**: 7 separate projects (one per affiliate) containing Vertex AI Search collections, connectors, and apps.
-- **Affiliate Groups**: 7 Australian real estate affiliate groups (Admins and Users) prefixed with `rwg-` (e.g. `rwg-toorak-users`).
+- **GCP Projects**: Dedicated projects per configured environment (e.g. `${customer_id}-prod` and `${customer_id}-non-prod`) containing Vertex AI Search collections, connectors, and apps.
+- **Environments**: Configurable via the `environments` variable (e.g., `["prod"]`, `["non-prod", "prod"]`).
+- **Customer Workspace Groups**: Environment-scoped groups (Admins and Users) prefixed with customer ID and environment (e.g. `rwg-prod-users` and `rwg-prod-admins`).
 
 ---
 
@@ -14,7 +15,7 @@ This repository contains the Terraform Infrastructure as Code (IaC) configuratio
 Before running the Terraform deployment, ensure you have completed the following setup:
 
 ### 1. Google Cloud Platform (GCP)
-- A GCP project ID with billing enabled.
+- A GCP project ID with billing enabled (bootstrap project).
 - Your user or service account must have permissions to enable APIs and manage Vertex AI Search (Discovery Engine) resources.
 
 ### 2. Google Workspace
@@ -31,13 +32,17 @@ Before running the Terraform deployment, ensure you have completed the following
 Create a `terraform.tfvars` file to configure your deployment values:
 
 ```hcl
-project_id_prefix      = "mycompany-" # Optional prefix for project IDs
-billing_account        = "012345-6789AB-CDEF01" # Mandatory billing account ID
-folder_id              = "12345678901" # Optional GCP folder ID to place projects under
-org_id                 = "98765432109" # Optional GCP organization ID (if folder_id is null)
+customer_id           = "rwg"                       # Short slug/identifier for the customer
+customer_name         = "Ray White Group"           # Customer display name
+environments          = ["non-prod", "prod"]        # Configurable environments (e.g. ["prod"] or ["non-prod", "prod"])
+project_id_prefix      = ""                          # Optional prefix for project IDs
+billing_account        = "012345-6789AB-CDEF01"      # Mandatory billing account ID
+folder_id              = "12345678901"               # Optional GCP folder ID to place projects under
+org_id                 = "98765432109"               # Optional GCP organization ID (if folder_id is null)
 company_domain         = "your-workspace-domain.com"
 workspace_customer_id  = "C01234567"
 workspace_admin_email  = "admin-impersonator@your-workspace-domain.com"
+sa_email               = "gemini-provisioner@affiliates-bootstrap.iam.gserviceaccount.com"
 ```
 
 *Note: `workspace_admin_email` is the email address of a Workspace administrator that the service account will impersonate to manage the groups.*
@@ -81,18 +86,18 @@ terraform apply
 ## Post-Deployment Actions
 
 To complete the setup and make the Gemini Enterprise search active:
-1. **Workspace Project Authorization**: In the Google Workspace Admin Console, authorize the GCP Project ID to access your Workspace data.
-2. **Add Group Members**: Add affiliate employees and administrators to their respective `rwg-*-users` and `rwg-*-admins` Google Groups.
+1. **Workspace Project Authorization**: In the Google Workspace Admin Console, authorize the GCP Project IDs to access your Workspace data.
+2. **Add Group Members**: Add customer employees and administrators to their respective `${customer_id}-${environment}-users` and `${customer_id}-${environment}-admins` Google Groups.
 3. **Assign Licenses**: Assign Gemini Enterprise licenses using the automated allocation script (`scripts/allocate_licenses.py`).
 
 ---
 
 ## Gemini Enterprise License Allocation & Distribution
 
-Licenses are provisioned centrally at the **Cloud Billing Account** level (`0111AA-12FED7-0F6152`) and distributed to affiliate project numbers via automated API workflows.
+Licenses are provisioned centrally at the **Cloud Billing Account** level (`0111AA-12FED7-0F6152`) and distributed to customer environment project numbers via automated API workflows.
 
 ### 1. Configure Seat Distribution
-Edit [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/affiliate-provisioning/config/license_allocations.json) to set your billing account, subscription license config ID, and quota distribution per project:
+Edit [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/affiliate-provisioning/config/license_allocations.json) to set your billing account, subscription license config ID, and quota distribution per environment:
 
 ```json
 {
@@ -103,9 +108,18 @@ Edit [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/affiliate
   "location": "global",
   "allocations": [
     {
-      "project_id": "rwg-double-bay",
+      "project_id": "rwg-prod",
       "project_number": "1067043213672",
-      "affiliate_name": "Double Bay",
+      "environment": "prod",
+      "environment_name": "Production",
+      "seat_count": 4,
+      "status": "active"
+    },
+    {
+      "project_id": "rwg-non-prod",
+      "project_number": "193224435442",
+      "environment": "non-prod",
+      "environment_name": "Non-Production",
       "seat_count": 1,
       "status": "active"
     }
@@ -125,7 +139,7 @@ python3 scripts/allocate_licenses.py --distribute
 ```
 
 ### 3. Configure Auto-Registration on User Login
-Configure each target project's `default_user_store` to automatically bind users to its local distributed license on first login:
+Configure each target environment project's `default_user_store` to automatically bind users to its local distributed license on first login:
 
 ```bash
 # Dry run
@@ -136,10 +150,11 @@ python3 scripts/allocate_licenses.py --configure-auto-register
 ```
 
 ### 4. Verify Active Allocations
-Check the active license configs and assigned quota across all affiliate projects:
+Check the active license configs and assigned quota across customer environment projects:
 
 ```bash
 python3 scripts/allocate_licenses.py --list
 ```
+
 
 

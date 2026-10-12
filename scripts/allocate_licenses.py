@@ -56,7 +56,7 @@ def get_user_licenses(project_id, location, token):
     return res.get("userLicenses", [])
 
 def list_allocations(central_project_id, location, token, config_data=None):
-    """Display detailed summary of billing subscription and affiliate project seat distributions."""
+    """Display detailed summary of billing subscription and customer environment seat distributions."""
     print(f"\n=======================================================")
     print(f" Gemini Enterprise Licensing Summary")
     print(f"=======================================================\n")
@@ -71,11 +71,11 @@ def list_allocations(central_project_id, location, token, config_data=None):
     print(f"Location             : {location}\n")
 
     allocations = config_data.get("allocations", []) if config_data else []
-    print("Affiliate Projects & Seat Allocations:")
+    print("Customer Environment Projects & Seat Allocations:")
     for item in allocations:
         p_id = item.get("project_id", "unknown")
         p_num = item.get("project_number", "")
-        aff_name = item.get("affiliate_name", p_id)
+        env_label = item.get("environment_name") or item.get("environment") or item.get("affiliate_name") or p_id
         target_seats = item.get("seat_count", 0)
 
         # Query project-level license configs
@@ -86,12 +86,12 @@ def list_allocations(central_project_id, location, token, config_data=None):
                 cfg_name = active_cfg.get("name", "").split("/")[-1]
                 count = active_cfg.get("licenseCount", "0")
                 state = active_cfg.get("state", "UNKNOWN")
-                print(f"  • {aff_name:<16} | Project: {p_id:<18} | Seats: {count} ({state}) | Config: {cfg_name}")
+                print(f"  • {env_label:<16} | Project: {p_id:<18} | Seats: {count} ({state}) | Config: {cfg_name}")
             else:
                 status_str = "Skipped (0 seats)" if target_seats == 0 else "No Active Config"
-                print(f"  • {aff_name:<16} | Project: {p_id:<18} | Status: {status_str}")
+                print(f"  • {env_label:<16} | Project: {p_id:<18} | Status: {status_str}")
         except Exception as e:
-            print(f"  • {aff_name:<16} | Project: {p_id:<18} | Error: {e}")
+            print(f"  • {env_label:<16} | Project: {p_id:<18} | Error: {e}")
     print()
 
 def distribute_license_config(billing_account, license_config_id, project_number, seat_count, token, central_project="affiliates-bootstrap", location="global", dry_run=False):
@@ -147,8 +147,8 @@ def load_config(config_file):
         return json.load(f)
 
 def main():
-    parser = argparse.ArgumentParser(description="Distribute and configure Gemini Enterprise licenses across GCP affiliate projects.")
-    parser.add_argument("--list", action="store_true", help="List license configs and seat quotas across all affiliate projects.")
+    parser = argparse.ArgumentParser(description="Distribute and configure Gemini Enterprise licenses across GCP customer environment projects.")
+    parser.add_argument("--list", action="store_true", help="List license configs and seat quotas across all customer environment projects.")
     parser.add_argument("--distribute", action="store_true", help="Distribute subscription seats from Billing Account to project numbers.")
     parser.add_argument("--configure-auto-register", action="store_true", help="Configure projects to auto-provision licenses upon user login.")
     parser.add_argument("--retract", action="store_true", help="Retract distributed licenses back to the Billing Account pool.")

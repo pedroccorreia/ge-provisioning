@@ -1,7 +1,32 @@
 variable "project_id_prefix" {
   type        = string
-  description = "An optional prefix to prepend to each affiliate project ID to ensure global uniqueness"
+  description = "An optional prefix to prepend to each customer project ID to ensure global uniqueness"
   default     = ""
+}
+
+variable "customer_id" {
+  type        = string
+  description = "Short identifier/slug for the customer (used in project IDs and resource names, e.g. acme)"
+  default     = "rwg"
+}
+
+variable "customer_name" {
+  type        = string
+  description = "The human-readable display name of the customer (e.g. Acme Corp)"
+  default     = "Ray White Group"
+}
+
+variable "environments" {
+  type        = set(string)
+  description = "Configurable list/set of environments to provision for the customer (e.g. ['non-prod', 'prod'])"
+  default     = ["non-prod", "prod"]
+
+  validation {
+    condition = length(var.environments) > 0 && alltrue([
+      for env in var.environments : contains(["non-prod", "prod"], env)
+    ])
+    error_message = "Allowed environments are 'non-prod' and 'prod', and at least one environment must be specified."
+  }
 }
 
 variable "location" {
@@ -23,22 +48,6 @@ variable "workspace_customer_id" {
 variable "workspace_admin_email" {
   type        = string
   description = "The email address of a Google Workspace Administrator to impersonate (required for Workspace provider)"
-}
-
-variable "affiliates" {
-  type = map(object({
-    name   = string
-    region = string
-  }))
-  default = {
-    rwg-double-bay  = { name = "Double Bay", region = "New South Wales" }
-    rwg-toorak      = { name = "Toorak", region = "Victoria" }
-    rwg-new-farm    = { name = "New Farm", region = "Queensland" }
-    rwg-mosman-park = { name = "Mosman Park", region = "Western Australia" }
-    rwg-unley-park  = { name = "Unley Park", region = "South Australia" }
-    rwg-sandy-bay   = { name = "Sandy Bay", region = "Tasmania" }
-    rwg-fannie-bay  = { name = "Fannie Bay", region = "Northern Territory" }
-  }
 }
 
 variable "folder_id" {
