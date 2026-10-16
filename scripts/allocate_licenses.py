@@ -187,45 +187,118 @@ def run_preflight_assertions(allocations, billing_account, license_config_id, ce
     print("  [PASS] All preflight assertions passed.\n")
 
 
-def list_allocations(central_project_id, location, token, config_data):
+def list_allocations(central_project_id, location, token, config_data, json_output=False):
     """Display detailed summary of billing subscription and customer environment seat distributions."""
-    print(f"\n=======================================================")
-    print(f" Gemini Enterprise Licensing Summary")
-    print(f"=======================================================\n")
-
     billing_account = config_data.get("billing_account")
     sub_id = config_data.get("subscription_id", "N/A")
     sub_tier = config_data.get("subscription_tier", "Gemini Enterprise")
     lic_config = config_data.get("license_config_id", "N/A")
 
-    print(f"Billing Account      : {billing_account}")
-    print(f"License Config ID    : {lic_config}")
-    print(f"Subscription ID      : {sub_id}")
-    print(f"Subscription Tier    : {sub_tier}")
-    print(f"Location             : {location}\n")
-
     allocations = config_data.get("allocations", [])
-    print("Customer Environment Projects & Seat Allocations:")
+    results = []
+
     for item in allocations:
         p_id = item.get("project_id", "unknown")
         p_num = item.get("project_number", "")
         env_label = item.get("environment_name") or item.get("environment") or p_id
         target_seats = item.get("seat_count", 0)
 
+        entry = {
+            "project_id": p_id,
+            "project_number": p_num,
+            "environment": env_label,
+            "target_seats": target_seats,
+            "active_config": None,
+            "allocated_seats": 0,
+            "state": "NO_CONFIG"
+        }
+
         try:
             cfgs = get_license_configs(p_id, location, token)
             active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE"), None)
             if active_cfg:
                 cfg_name = active_cfg.get("name", "").split("/")[-1]
-                count = active_cfg.get("licenseCount", "0")
+                count = int(active_cfg.get("licenseCount", "0"))
                 state = active_cfg.get("state", "UNKNOWN")
-                print(f"  • {env_label:<16} | Project: {p_id:<22} (Project #{p_num}) | Seats: {count} ({state}) | Config: {cfg_name}")
+                entry["active_config"] = active_cfg.get("name")
+                entry["allocated_seats"] = count
+                entry["state"] = state
             else:
-                status_str = "Skipped (0 seats)" if target_seats == 0 else "No Active Config"
-                print(f"  • {env_label:<16} | Project: {p_id:<22} (Project #{p_num}) | Status: {status_str}")
+                entry["state"] = "SKIPPED_0_SEATS" if target_seats == 0 else "NO_ACTIVE_CONFIG"
         except Exception as e:
-            print(f"  • {env_label:<16} | Project: {p_id:<22} (Project #{p_num}) | Error: {e}")
+            entry["state"] = f"ERROR: {e}"
+
+        results.append(entry)
+
+    if json_output:
+        payload = {
+            "billing_account": billing_account,
+            "license_config_id": lic_config,
+            "subscription_id": sub_id,
+            "subscription_tier": sub_tier,
+            "location": location,
+            "allocations": results
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    print(f"\n=======================================================")
+    print(f" Gemini Enterprise Licensing Summary")
+    print(f"=======================================================\n")
+    print(f"Billing Account      : {billing_account}")
+    print(f"License Config ID    : {lic_config}")
+    print(f"Subscription ID      : {sub_id}")
+    print(f"Subscription Tier    : {sub_tier}")
+    print(f"Location             : {location}\n")
+
+    print("Customer Environment Projects & Seat Allocations:")
+    for entry in results:
+        env_label = entry["environment"]
+        p_id = entry["project_id"]
+        p_num = entry["project_number"]
+        if entry["active_config"]:
+            cfg_name = entry["active_config"].split("/")[-1]
+            print(f"  • {env_label:<16} | Project: {p_id:<22} (Project #{p_num}) | Seats: {entry['allocated_seats']} ({entry['state']}) | Config: {cfg_name}")
+        else:
+            print(f"  • {env_label:<16} | Project: {p_id:<22} (Project #{p_num}) | Status: {entry['state']}")
     print()
+
+
+def emit_tfvars(allocations, location, token):
+    """
+    Query active license configs for all allocated projects and output
+    the license_config_names block for terraform.tfvars.
+    """
+    lines = ["license_config_names = {"]
+    found_any = False
+
+    for item in allocations:
+        p_id = item.get("project_id")
+        env_key = item.get("environment") or p_id
+        if not p_id:
+            continue
+        try:
+            cfgs = get_license_configs(p_id, location, token)
+            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE"), None)
+            if active_cfg:
+                full_name = active_cfg.get("name")
+                lines.append(f'  "{env_key}" = "{full_name}"')
+                found_any = True
+        except Exception as e:
+            print(f"# Warning: error querying project '{p_id}': {e}", file=sys.stderr)
+
+    lines.append("}")
+    output_str = "\n".join(lines)
+
+    if found_any:
+        print("\n# Copy the following block into terraform.tfvars to manage user store defaults declaratively:")
+        print(output_str)
+        print()
+    else:
+        print("# No active license configs found on projects yet. Run --distribute first.", file=sys.stderr)
+        print(output_str)
+
+    return output_str
 
 
 def distribute_license_config(billing_account, license_config_id, project_number, seat_count, token, central_project, location="global", dry_run=False):
@@ -322,6 +395,8 @@ def main():
     parser.add_argument("--target-project", help="Target project ID for single project operations.")
     parser.add_argument("--dry-run", action="store_true", help="Simulate changes without calling GCP write endpoints.")
     parser.add_argument("--skip-preflight", action="store_true", help="Skip preflight assertion checks.")
+    parser.add_argument("--json", action="store_true", help="Output summary in JSON format.")
+    parser.add_argument("--emit-tfvars", action="store_true", help="Emit license_config_names HCL block for terraform.tfvars.")
 
     args = parser.parse_args()
 
@@ -338,9 +413,9 @@ def main():
     location = args.location or config_data.get("location") or "global"
     allocations = config_data.get("allocations", [])
 
-    if not args.list and not args.distribute and not args.configure_auto_register and not args.retract:
+    if not args.list and not args.distribute and not args.configure_auto_register and not args.retract and not args.emit_tfvars:
         parser.print_help()
-        print("\nNote: Specify at least one action: --list, --distribute, --configure-auto-register, or --retract.")
+        print("\nNote: Specify at least one action: --list, --distribute, --configure-auto-register, --retract, or --emit-tfvars.")
         sys.exit(1)
 
     # Validate essential identifiers
@@ -348,8 +423,12 @@ def main():
 
     token = get_access_token()
 
+    if args.emit_tfvars:
+        emit_tfvars(allocations, location, token)
+        return
+
     if args.list:
-        list_allocations(project_id, location, token, config_data=config_data)
+        list_allocations(project_id, location, token, config_data=config_data, json_output=args.json)
         return
 
     # Run Preflight Assertions for state-modifying actions

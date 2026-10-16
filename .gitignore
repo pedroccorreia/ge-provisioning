@@ -12,6 +12,8 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+.plans/
+*.tfplan
 
 # Credentials & Service Account Keys
 *key*.json

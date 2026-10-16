@@ -1,6 +1,6 @@
 # Gemini Enterprise Customer Provisioning IaC
 
-This repository contains production-grade Terraform Infrastructure as Code (IaC) to provision and configure Gemini Enterprise (Vertex AI Search) for Google Workspace.
+This repository contains production-grade Terraform Infrastructure as Code (IaC) and automation tooling to provision and configure Gemini Enterprise (Vertex AI Search) with Google Workspace connectors.
 
 It deploys:
 - **Dedicated GCP Projects** per configurable customer environment (e.g. `non-prod`, `prod`, `dev`, `pilot`).
@@ -10,7 +10,7 @@ It deploys:
 - **User Store with Auto-Registration** (`google_discovery_engine_user_store`).
 - **Federated Workspace Connectors** (`google_mail`, `google_calendar`, `google_drive`, `google_chat`).
 - **Unified Intranet Search App & Governed Assistant** (`google_discovery_engine_search_engine`, `google_discovery_engine_assistant`).
-- **Automated Seat Distribution & Verification** tooling.
+- **Automated Seat Distribution & Verification** tooling via `Makefile`.
 
 ---
 
@@ -47,39 +47,72 @@ flowchart TD
 ```
 
 ### Why Location is Global
-The `location` variable defaults to `global`. In Gemini Enterprise federated Workspace search (Gmail, Calendar, Drive, Chat), queries are federated directly against Google Workspace APIs in real-time under user credentials and are not ingested or copied into GCP persistent data stores. Google Workspace connectors currently require the Discovery Engine resources to reside in the `global` location.
+The `location` variable defaults to `global`. In Gemini Enterprise federated Workspace search (Gmail, Calendar, Drive, Chat), queries are federated directly against Google Workspace APIs in real-time under user credentials and are not ingested or copied into GCP persistent data stores. Google Workspace connectors currently require Discovery Engine resources to reside in the `global` location.
+
+---
+
+## Licensing Architecture & IAM
+
+Gemini Enterprise licenses are managed at the **Cloud Billing Account** level:
+
+```mermaid
+flowchart TD
+    subgraph BillingLevel["Cloud Billing Account (0X1XXX-XXXXXX-XXXXXX)"]
+        Sub["Gemini Enterprise Subscription Pool<br/><code>BillingAccountLicenseConfig</code>"]
+    end
+
+    subgraph Distribution["distributeLicenseConfig (make licenses)"]
+        D1["Distribute N seats to Prod"]
+        D2["Distribute M seats to Non-Prod"]
+    end
+
+    subgraph Projects["Customer Projects (User Store Auto-Register: ON)"]
+        P1["Production (<customer_id>-prod)"]
+        P2["Non-Production (<customer_id>-non-prod)"]
+    end
+
+    Sub --> D1 --> P1
+    Sub --> D2 --> P2
+```
+
+1. **Central Subscription Model**: Subscriptions are purchased on the Cloud Billing Account and distributed to project numbers via `billingAccounts.billingAccountLicenseConfigs.distributeLicenseConfig`.
+2. **Auto-Registration on Login**: Projects configure `default_user_store` with `enable_license_auto_register = true`, automatically granting licenses to users upon first application login without manual seat assignments.
+3. **Declarative State**: The Terraform configuration automatically emits `config/license_allocations.json` (see template in [`config/license_allocations.example.json`](config/license_allocations.example.json)), linking live GCP project numbers directly to seat quotas.
+4. **Required IAM Permissions**:
+   - `discoveryengine.billingAccountLicenseConfigs.distribute` on the Cloud Billing Account.
+   - `roles/discoveryengine.admin` on the environment projects.
+   - `roles/resourcemanager.projectViewer` on the environment projects.
 
 ---
 
 ## Prerequisites
 
 1. **Google Cloud Platform**:
-   - An active GCP Cloud Billing Account (e.g. `0X1XXX-XXXXXX-XXXXXX`).
-   - A GCP folder or organization where projects will be created.
-   - Terraform `v1.5+` installed locally or in CI.
+   - Active GCP Cloud Billing Account (e.g. `0X1XXX-XXXXXX-XXXXXX`).
+   - Folder or Organization where customer projects will be provisioned.
+   - Terraform `v1.5+`, `gcloud`, and `python3 (>= 3.9)` installed.
    - Local authentication:
      ```bash
      gcloud auth application-default login
+     gcloud auth login
      ```
-
 2. **Google Workspace**:
-   - Google Workspace Customer ID (e.g. `C01234567`) and primary domain (`example.com`).
-   - Workspace Administrator access to authorize Domain-Wide Delegation at [admin.google.com](https://admin.google.com/ac/owl/domainwidedelegation).
-
+   - Workspace Customer ID (e.g. `C01234567`) and primary domain (`example.com`).
+   - Workspace Super Administrator access to authorize Domain-Wide Delegation at [admin.google.com](https://admin.google.com/ac/owl/domainwidedelegation).
 3. **Gemini Enterprise Subscription**:
-   - Subscription purchased at the Cloud Billing Account level with available license seats.
+   - Active Gemini Enterprise subscription with allocated seat capacity on the Billing Account.
 
 ---
 
 ## Configuration
 
-Copy the example variables file to create your active configuration:
+Copy the example variables file:
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-Edit `terraform.tfvars` with your customer environment settings:
+Edit `terraform.tfvars` with customer values:
 
 ```hcl
 customer_id           = "example-customer"
@@ -90,11 +123,11 @@ workspace_customer_id = "C01234567"
 billing_account       = "0X1XXX-XXXXXX-XXXXXX"
 folder_id             = "123456789012"
 
-# Staged rollout flag (leave false for Stage 1)
+# Staged rollout flag (must be false for Stage 1)
 enable_connectors     = false
 workspace_connectors  = ["google_mail", "google_calendar", "google_drive", "google_chat"]
 
-# Seat quota allocations per environment
+# Seat allocations per environment
 seat_allocations = {
   prod     = 4
   non-prod = 1
@@ -103,99 +136,59 @@ seat_allocations = {
 
 ---
 
-## Staged Deployment Runbook
+## Deployment & Operational Procedure
 
-Deploying Gemini Enterprise with federated Workspace connectors involves an unavoidable one-time Workspace Admin authorization gate. The configuration is intentionally staged into two safe apply steps:
+The end-to-end staged deployment procedure is documented in:
+- **[RUNBOOK.md](RUNBOOK.md)**: The authoritative step-by-step checklist and disaster prevention manual for human operators and CI systems.
+- **[AGENTS.md](AGENTS.md)**: The autonomous agent operational protocol, rules of engagement, and hand-off templates.
 
-### Stage 1: Deploy Foundation Infrastructure
+### Quick Command Surface
 
-Provisions the GCP projects, APIs, Discovery Engine service agent identity, IdP configuration, Cloud Identity user groups, user store, and single source of truth license allocations file.
-
-```bash
-terraform init
-terraform apply
-```
-
-Review the output checklist for Domain-Wide Delegation:
+All operations are executed through the standard `Makefile`:
 
 ```bash
-terraform output -json dwd_checklist
+make status            # Check live phase and identify blockers
+make plan-foundation   # Stage 1: Generate foundation plan with safety guard
+make apply-foundation  # Stage 1: Apply foundation infrastructure
+make dwd-checklist     # Stage 2: Display Workspace DWD authorization details
+make plan-connectors   # Stage 3: Generate connectors plan with safety guard
+make apply-connectors  # Stage 3: Apply connectors, engines & assistants
+make licenses-dryrun   # Stage 4: Verify seat distribution preflight assertions
+make licenses          # Stage 4: Distribute seats to environment projects
+make verify            # Stage 5: Verify health across all components
+make test              # Run unit tests and Terraform validation
 ```
-
-### Stage 2: Workspace Admin Domain-Wide Delegation (DWD)
-
-1. Open the [Google Workspace Admin Console - Domain-Wide Delegation](https://admin.google.com/ac/owl/domainwidedelegation).
-2. Click **Add new**.
-3. For each environment project from the `terraform output dwd_checklist`:
-   - **Client ID**: Copy the `service_agent_email` (format: `service-<PROJECT_NUMBER>@gcp-sa-discoveryengine.iam.gserviceaccount.com`).
-   - **OAuth Scopes**: Paste the comma-separated `oauth_scopes_csv` string:
-     ```
-     https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/chat.spaces.readonly,https://www.googleapis.com/auth/chat.messages.readonly,https://www.googleapis.com/auth/chat.memberships.readonly
-     ```
-   - Click **Authorize**.
-4. In the Google Workspace Admin Console under **Security > Access and data control > API controls > Google Cloud Core Services**, ensure each environment GCP Project is allowed access.
-
-### Stage 3: Deploy Connectors, Search Engines & Assistants
-
-Once DWD is authorized, enable connectors in `terraform.tfvars` or pass the flag:
-
-```bash
-terraform apply -var="enable_connectors=true"
-```
-
-This provisions:
-- Google Mail, Google Calendar, Google Drive, and Google Chat federated connectors.
-- The unified Discovery Engine Search Application.
-- Engine-level IAM permissions for the customer user groups.
-- The governed Gemini Enterprise Assistant with web grounding and custom instructions.
-
-### Stage 4: Distribute Subscription Licenses
-
-Distribute license seats from your Cloud Billing Account pool to target projects using the automated script:
-
-```bash
-# Preview distribution and verify project numbers & billing pool capacity
-python3 scripts/allocate_licenses.py --distribute --dry-run
-
-# Execute distribution
-python3 scripts/allocate_licenses.py --distribute
-```
-
-### Stage 5: End-to-End Verification
-
-Run the verification script to inspect all components across environments:
-
-```bash
-python3 scripts/verify.py
-```
-
-The script validates:
-- Status of all Workspace data connectors (`ACTIVE`)
-- Search engine and assistant health
-- Project-level distributed license configs and assigned seat quotas
-- User store auto-registration setting
-- Direct links to the Vertex AI Search application console
 
 ---
 
 ## File Structure
 
 ```
-├── .github/workflows/
-│   └── terraform.yml               # CI: terraform fmt and validate
+├── .agent/
+│   └── workflows/
+│       └── deploy.md                # Antigravity workflow
+├── .github/
+│   └── workflows/
+│       └── terraform.yml            # CI: fmt, validate, test harness
 ├── config/
 │   ├── license_allocations.example.json # Example seat allocation schema
-│   └── license_allocations.json         # Generated runtime allocation (gitignored)
+│   └── license_allocations.json         # Runtime allocations (gitignored)
 ├── scripts/
-│   ├── allocate_licenses.py        # License distribution & auto-registration tool
-│   └── verify.py                   # Post-deployment validation script
-├── bootstrap.sh                    # Helper script for initial SA setup
-├── main.tf                         # Core Terraform resources
-├── outputs.tf                      # Terraform outputs & DWD checklist
-├── providers.tf                    # Google & Google-Beta providers
-├── terraform.tfvars.example        # Example sanitized variable definitions
-├── variables.tf                    # Input variable declarations
-├── versions.tf                     # Provider & Terraform version constraints
-├── todo.md                         # Deployment checklist
-└── licenses.md                     # Deep-dive licensing architecture reference
+│   ├── allocate_licenses.py         # License distribution & auto-registration tool
+│   ├── plan_guard.py                # Safety barrier preventing destroy/replace
+│   ├── status.py                    # State-driven phase detection engine
+│   ├── test_red.py                  # Negative & contract testing harness
+│   └── verify.py                    # Post-deployment validation script
+├── AGENTS.md                        # Autonomous agent operational protocol
+├── GEMINI.md                        # Agent entrypoint pointer
+├── Makefile                         # Unified command surface
+├── README.md                        # Architecture & concept reference
+├── RUNBOOK.md                       # Authoritative staged deployment runbook
+├── bootstrap.sh                     # Service Account helper bootstrap
+├── main.tf                          # Core Terraform resources
+├── outputs.tf                       # Terraform outputs & DWD checklist
+├── providers.tf                     # Google & Google-Beta providers
+├── terraform.tfvars.example         # Example sanitized variable definitions
+├── variables.tf                     # Input variable declarations
+└── versions.tf                      # Provider & Terraform version constraints
 ```

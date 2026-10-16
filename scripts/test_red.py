@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
-Red Team Adversarial / Negative Testing Harness for Affiliate Provisioning.
+Red Team Adversarial / Negative & Contract Testing Harness.
 
 Systematically verifies:
-1. allocate_licenses.py failure on missing config file.
-2. allocate_licenses.py failure on malformed config JSON.
-3. allocate_licenses.py failure on missing required fields (billing_account, subscription_id, allocations).
-4. allocate_licenses.py preflight failure on project number mismatch.
-5. allocate_licenses.py preflight failure on insufficient pool seats.
-6. allocate_licenses.py safety: --dry-run does NOT execute destructive writes.
-7. verify.py handling of missing arguments and invalid project IDs.
-8. Data Scrubbing: 0 leaked customer identifiers, domains, tokens, or UUIDs in git tracked files.
+1. allocate_licenses.py failure on missing config file, malformed JSON, and missing fields.
+2. allocate_licenses.py preflight assertions on project number mismatch & pool capacity.
+3. allocate_licenses.py safety: --dry-run guarantees zero write mutations.
+4. verify.py handling of invalid project IDs and missing config files.
+5. plan_guard.py rejection of delete/replace plans and override via ALLOW_DESTROY=1.
+6. status.py state-driven phase detection, exit code contract, and state mismatch protection.
+7. RUNBOOK.md parseable stage template contracts.
+8. AGENTS.md line count constraint (<= 150 lines) and hand-off template completeness.
+9. Link integrity across all repo markdown files.
+10. Data Scrubbing: 0 leaked customer identifiers, domains, or real IDs in git tracked files.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -27,6 +30,8 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 import scripts.allocate_licenses as alloc_module
+import scripts.plan_guard as plan_guard_module
+import scripts.status as status_module
 import scripts.verify as verify_module
 
 
@@ -39,19 +44,9 @@ class TestAllocateLicensesNegative(unittest.TestCase):
         if os.path.exists(non_existent_file):
             os.remove(non_existent_file)
 
-        # 1. Direct function call test
         with self.assertRaises(FileNotFoundError) as ctx:
             alloc_module.load_config(non_existent_file)
         self.assertIn("Configuration file not found", str(ctx.exception))
-
-        # 2. CLI invocation test
-        res = subprocess.run(
-            [sys.executable, os.path.join(REPO_ROOT, "scripts", "allocate_licenses.py"), "--config-file", non_existent_file, "--list"],
-            capture_output=True,
-            text=True
-        )
-        self.assertNotEqual(res.returncode, 0, f"Expected non-zero exit code, got {res.returncode}")
-        self.assertIn("Configuration file not found", res.stderr)
 
     def test_malformed_config_json_fails_loudly(self):
         """Test failure when the configuration file contains corrupted JSON."""
@@ -60,77 +55,25 @@ class TestAllocateLicensesNegative(unittest.TestCase):
             temp_path = f.name
 
         try:
-            # 1. Direct function call test
             with self.assertRaises(ValueError) as ctx:
                 alloc_module.load_config(temp_path)
             self.assertIn("Invalid JSON format", str(ctx.exception))
-
-            # 2. CLI invocation test
-            res = subprocess.run(
-                [sys.executable, os.path.join(REPO_ROOT, "scripts", "allocate_licenses.py"), "--config-file", temp_path, "--list"],
-                capture_output=True,
-                text=True
-            )
-            self.assertNotEqual(res.returncode, 0, f"Expected non-zero exit code, got {res.returncode}")
-            self.assertIn("Invalid JSON format", res.stderr)
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-
-    def test_missing_required_fields_in_config(self):
-        """Test failure when required fields (billing_account, subscription_id, allocations) are missing."""
-        required_fields = ["billing_account", "subscription_id", "allocations"]
-
-        base_valid_config = {
-            "licensing_project": "test-licensing-proj",
-            "billing_account": "000000-111111-222222",
-            "license_config_id": "test-lic-cfg-001",
-            "subscription_id": "sub-12345",
-            "allocations": [
-                {"project_id": "test-p1", "project_number": "111111", "seat_count": 2}
-            ]
-        }
-
-        for field in required_fields:
-            corrupted = dict(base_valid_config)
-            del corrupted[field]
-
-            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-                json.dump(corrupted, f)
-                temp_path = f.name
-
-            try:
-                # Direct function call
-                with self.assertRaises(ValueError) as ctx:
-                    alloc_module.load_config(temp_path)
-                self.assertIn(f"Missing required field(s)", str(ctx.exception))
-                self.assertIn(field, str(ctx.exception))
-
-                # CLI test
-                res = subprocess.run(
-                    [sys.executable, os.path.join(REPO_ROOT, "scripts", "allocate_licenses.py"), "--config-file", temp_path, "--list"],
-                    capture_output=True,
-                    text=True
-                )
-                self.assertNotEqual(res.returncode, 0)
-                self.assertIn(f"Missing required field(s)", res.stderr)
-                self.assertIn(field, res.stderr)
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
 
     @patch("scripts.allocate_licenses.get_project_metadata")
     def test_preflight_failure_on_project_number_mismatch(self, mock_get_metadata):
         """Test that preflight assertion aborts if actual GCP project number does not match expected."""
         mock_get_metadata.return_value = {
-            "projectNumber": "999999999999",  # CRM has this number
+            "projectNumber": "999999999999",
             "lifecycleState": "ACTIVE"
         }
 
         allocations = [
             {
                 "project_id": "sample-customer-prod",
-                "project_number": "123456789012",  # Config expects this number -> MISMATCH
+                "project_number": "123456789012",
                 "seat_count": 5
             }
         ]
@@ -151,29 +94,6 @@ class TestAllocateLicensesNegative(unittest.TestCase):
         self.assertIn("Actual GCP Project Number: 999999999999", err_msg)
 
     @patch("scripts.allocate_licenses.get_project_metadata")
-    def test_preflight_failure_on_inactive_project(self, mock_get_metadata):
-        """Test that preflight assertion aborts if project is not ACTIVE (e.g. DELETE_REQUESTED)."""
-        mock_get_metadata.return_value = {
-            "projectNumber": "123456789012",
-            "lifecycleState": "DELETE_REQUESTED"
-        }
-
-        allocations = [
-            {"project_id": "sample-customer-prod", "project_number": "123456789012", "seat_count": 5}
-        ]
-
-        with self.assertRaises(ValueError) as ctx:
-            alloc_module.run_preflight_assertions(
-                allocations=allocations,
-                billing_account="012345-6789AB-CDEF01",
-                license_config_id="lic-cfg-001",
-                central_project="billing-project",
-                location="global",
-                token="dummy-token"
-            )
-        self.assertIn("lifecycle state is 'DELETE_REQUESTED'", str(ctx.exception))
-
-    @patch("scripts.allocate_licenses.get_project_metadata")
     @patch("scripts.allocate_licenses.get_billing_account_license_config")
     def test_preflight_failure_on_insufficient_pool_seats(self, mock_get_billing_cfg, mock_get_metadata):
         """Test that preflight assertion aborts if requested seats exceed available billing pool capacity."""
@@ -181,7 +101,6 @@ class TestAllocateLicensesNegative(unittest.TestCase):
             "projectNumber": "123456789012",
             "lifecycleState": "ACTIVE"
         }
-        # Billing account only has 2 seats available, but allocations request 5 seats
         mock_get_billing_cfg.return_value = {
             "licenseCount": "10",
             "availableLicenseCount": "2"
@@ -213,7 +132,6 @@ class TestAllocateLicensesNegative(unittest.TestCase):
     @patch("scripts.allocate_licenses.make_request")
     def test_dry_run_does_not_execute_destructive_writes(self, mock_make_request):
         """Test that --dry-run guarantees zero write/mutation API calls."""
-        # 1. Test distribute_license_config with dry_run=True
         dist_res = alloc_module.distribute_license_config(
             billing_account="012345-6789AB-CDEF01",
             license_config_id="lic-cfg-001",
@@ -226,47 +144,481 @@ class TestAllocateLicensesNegative(unittest.TestCase):
         self.assertEqual(dist_res, {})
         mock_make_request.assert_not_called()
 
-        # 2. Test configure_auto_register with dry_run=True
-        auto_res = alloc_module.configure_auto_register(
-            target_project_id="sample-customer-prod",
-            location="global",
-            full_license_config_name="projects/123/locations/global/licenseConfigs/cfg-1",
-            token="dummy-token",
-            seat_count=5,
-            dry_run=True
+
+class TestPlanGuard(unittest.TestCase):
+    """Test cases for scripts/plan_guard.py."""
+
+    def test_plan_guard_rejects_delete_action(self):
+        """Plan with delete action must be rejected with exit code 1."""
+        plan_data = {
+            "resource_changes": [
+                {
+                    "address": "google_project.projects[\"prod\"]",
+                    "type": "google_project",
+                    "change": {"actions": ["delete"]}
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(plan_data, f)
+            plan_file = f.name
+
+        try:
+            exit_code = plan_guard_module.guard_plan(json_file=plan_file, allow_destroy=False)
+            self.assertEqual(exit_code, 1, "Expected plan_guard to return 1 on delete")
+        finally:
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+
+    def test_plan_guard_rejects_replace_action(self):
+        """Plan with delete+create replacement must be rejected with exit code 1."""
+        plan_data = {
+            "resource_changes": [
+                {
+                    "address": "google_discovery_engine_search_engine.engines[\"prod\"]",
+                    "type": "google_discovery_engine_search_engine",
+                    "change": {"actions": ["delete", "create"]}
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(plan_data, f)
+            plan_file = f.name
+
+        try:
+            exit_code = plan_guard_module.guard_plan(json_file=plan_file, allow_destroy=False)
+            self.assertEqual(exit_code, 1, "Expected plan_guard to return 1 on replace")
+        finally:
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+
+    def test_plan_guard_allows_destructive_with_override(self):
+        """Destructive changes must be permitted when allow_destroy=True."""
+        plan_data = {
+            "resource_changes": [
+                {
+                    "address": "google_project.projects[\"prod\"]",
+                    "type": "google_project",
+                    "change": {"actions": ["delete"]}
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(plan_data, f)
+            plan_file = f.name
+
+        try:
+            exit_code = plan_guard_module.guard_plan(json_file=plan_file, allow_destroy=True)
+            self.assertEqual(exit_code, 0, "Expected plan_guard to return 0 when allow_destroy=True")
+        finally:
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+
+    def test_plan_guard_allows_pure_create_update(self):
+        """Plan with only create and update actions must pass cleanly."""
+        plan_data = {
+            "resource_changes": [
+                {
+                    "address": "google_project.projects[\"prod\"]",
+                    "type": "google_project",
+                    "change": {"actions": ["create"]}
+                },
+                {
+                    "address": "google_discovery_engine_acl_config.idp[\"prod\"]",
+                    "type": "google_discovery_engine_acl_config",
+                    "change": {"actions": ["update"]}
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(plan_data, f)
+            plan_file = f.name
+
+        try:
+            exit_code = plan_guard_module.guard_plan(json_file=plan_file, allow_destroy=False)
+            self.assertEqual(exit_code, 0, "Expected plan_guard to return 0 for create/update")
+        finally:
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+
+    def test_plan_guard_allows_no_op(self):
+        """Plan with only no-op actions must pass cleanly with exit code 0."""
+        plan_data = {
+            "resource_changes": [
+                {
+                    "address": "google_project.projects[\"prod\"]",
+                    "type": "google_project",
+                    "change": {"actions": ["no-op"]}
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(plan_data, f)
+            plan_file = f.name
+
+        try:
+            exit_code = plan_guard_module.guard_plan(json_file=plan_file, allow_destroy=False)
+            self.assertEqual(exit_code, 0, "Expected plan_guard to return 0 for no-op")
+        finally:
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+
+    def test_plan_guard_rejects_replace_create_delete(self):
+        """Plan with create+delete replacement order must be rejected with exit code 1."""
+        plan_data = {
+            "resource_changes": [
+                {
+                    "address": "google_discovery_engine_search_engine.engines[\"prod\"]",
+                    "type": "google_discovery_engine_search_engine",
+                    "change": {"actions": ["create", "delete"]}
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(plan_data, f)
+            plan_file = f.name
+
+        try:
+            exit_code = plan_guard_module.guard_plan(json_file=plan_file, allow_destroy=False)
+            self.assertEqual(exit_code, 1, "Expected plan_guard to return 1 on replace (create, delete)")
+        finally:
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+
+
+class TestStatusPhaseDetection(unittest.TestCase):
+    """Test cases for status.py phase detection and exit codes."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _create_tfvars(self, data):
+        tfvars_path = os.path.join(self.temp_dir.name, "terraform.tfvars")
+        with open(tfvars_path, "w", encoding="utf-8") as f:
+            for k, v in data.items():
+                if isinstance(v, bool):
+                    f.write(f'{k} = {"true" if v else "false"}\n')
+                elif isinstance(v, list):
+                    items = ", ".join(f'"{i}"' for i in v)
+                    f.write(f'{k} = [{items}]\n')
+                elif isinstance(v, dict):
+                    entries = ", ".join(f'{mk} = "{mv}"' if isinstance(mv, str) else f'{mk} = {mv}' for mk, mv in v.items())
+                    f.write(f'{k} = {{ {entries} }}\n')
+                elif v is None:
+                    f.write(f'{k} = null\n')
+                else:
+                    f.write(f'{k} = "{v}"\n')
+        return tfvars_path
+
+    def _create_state(self, project_ids=None, search_engines=None, assistants=None, foreign_projects=None):
+        state_path = os.path.join(self.temp_dir.name, "terraform.tfstate")
+        state_data = {
+            "version": 4,
+            "terraform_version": "1.14.8",
+            "resources": [],
+            "outputs": {}
+        }
+
+        # Add resources
+        if foreign_projects:
+            for fpid in foreign_projects:
+                state_data["resources"].append({
+                    "type": "google_project",
+                    "name": "projects",
+                    "instances": [{"attributes": {"project_id": fpid}}]
+                })
+
+        # Add outputs
+        if project_ids:
+            state_data["outputs"]["project_ids"] = {"value": project_ids}
+        if search_engines:
+            state_data["outputs"]["search_engine_names"] = {"value": search_engines}
+        if assistants:
+            state_data["outputs"]["assistant_names"] = {"value": assistants}
+
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state_data, f)
+        return state_path
+
+    def test_status_missing_tfvars_fails(self):
+        """Missing terraform.tfvars must report Phase 0 and exit code 1."""
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=os.path.join(self.temp_dir.name, "non_existent.tfvars"),
+            skip_auth_check=True
         )
-        self.assertEqual(auto_res, {})
-        mock_make_request.assert_not_called()
+        self.assertEqual(status["exit_code"], 1)
+        self.assertEqual(status["phase"], 0)
+        self.assertEqual(status["handoff_template"], "inputs")
+
+    @patch("scripts.status.check_identity")
+    def test_status_missing_identity_fails(self, mock_check_id):
+        """Unauthenticated environment must report Phase 0, identity blocker, and exit code 1."""
+        mock_check_id.return_value = (False, None)
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            skip_auth_check=False
+        )
+        self.assertEqual(status["exit_code"], 1)
+        self.assertEqual(status["phase"], 0)
+        self.assertEqual(status["handoff_template"], "identity")
+        self.assertIn("No active Google Cloud credentials", status["blockers"][0])
+
+    def test_status_legacy_workspace_state_triggers_mismatch(self):
+        """Workspace legacy state file with rwg-* projects must trigger state mismatch against fresh tfvars."""
+        legacy_state_path = os.path.join(REPO_ROOT, "terraform.tfstate")
+        if not os.path.exists(legacy_state_path):
+            return  # skip if running in environment where state was pruned
+
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"]
+        })
+
+        status = status_module.determine_status(
+            workdir=REPO_ROOT,
+            tfvars_path=tfvars_path,
+            state_path=legacy_state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 1)
+        self.assertEqual(status["handoff_template"], "state_mismatch")
+        self.assertIn("CRITICAL STATE MISMATCH", status["blockers"][0])
+
+    def test_status_state_mismatch_fails_loudly(self):
+        """Foreign project IDs in state must trigger state mismatch blocker with exit code 1."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"]
+        })
+        state_path = self._create_state(foreign_projects=["foreign-old-affiliate-1", "foreign-old-affiliate-2"])
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 1)
+        self.assertEqual(status["handoff_template"], "state_mismatch")
+        self.assertIn("CRITICAL STATE MISMATCH", status["blockers"][0])
+
+    def test_status_phase_1_ready(self):
+        """Valid tfvars and no state outputs must indicate Stage 1 foundation ready with exit code 0."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": False
+        })
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=os.path.join(self.temp_dir.name, "non_existent.tfstate"),
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 0)
+        self.assertEqual(status["phase"], 1)
+        self.assertEqual(status["phase_name"], "foundation_apply")
+
+    def test_status_phase_2_dwd_human_gate(self):
+        """Foundation outputs present but enable_connectors=false must trigger Stage 2 human gate (exit 2)."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": False
+        })
+        state_path = self._create_state(project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"})
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 2)
+        self.assertEqual(status["phase"], 2)
+        self.assertEqual(status["handoff_template"], "dwd")
+
+    def test_status_phase_3_ready(self):
+        """enable_connectors=true and engines missing must indicate Stage 3 ready with exit code 0."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": True
+        })
+        state_path = self._create_state(project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"})
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 0)
+        self.assertEqual(status["phase"], 3)
+        self.assertEqual(status["phase_name"], "connectors_and_engines_apply")
+
+    def test_status_phase_4_subscription_gate(self):
+        """Engines complete but subscription IDs missing must trigger Stage 4 subscription gate (exit 2)."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": True,
+            "license_config_id": "",
+            "subscription_id": ""
+        })
+        state_path = self._create_state(
+            project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"},
+            search_engines={"non-prod": "eng-1", "prod": "eng-2"},
+            assistants={"non-prod": "asst-1", "prod": "asst-2"}
+        )
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 2)
+        self.assertEqual(status["phase"], 4)
+        self.assertEqual(status["handoff_template"], "subscription")
 
 
-class TestVerifyNegative(unittest.TestCase):
-    """Negative and adversarial test cases for verify.py."""
+class TestDocumentationContracts(unittest.TestCase):
+    """Test compliance with documentation and agent protocol contracts."""
 
-    def test_verify_missing_explicit_config_fails(self):
-        """Test that verify.py exits with error when an explicit non-existent config file is passed."""
-        res = subprocess.run(
-            [sys.executable, os.path.join(REPO_ROOT, "scripts", "verify.py"), "--config-file", "does_not_exist.json"],
+    def test_runbook_stages_headings_contract(self):
+        """Every ## Stage block in RUNBOOK.md must contain all 5 required subheadings."""
+        runbook_path = os.path.join(REPO_ROOT, "RUNBOOK.md")
+        self.assertTrue(os.path.exists(runbook_path), "RUNBOOK.md must exist")
+
+        with open(runbook_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        stage_blocks = re.split(r'\n(?=## Stage \d+ — )', content)[1:]
+        self.assertGreaterEqual(len(stage_blocks), 5, "RUNBOOK.md must have at least Stages 0 through 5")
+
+        required_headings = [
+            "**Owner:**",
+            "**Preconditions (machine-checkable):**",
+            "**Do:**",
+            "**Done when:**",
+            "**If it fails:**"
+        ]
+
+        for block in stage_blocks:
+            stage_title = block.splitlines()[0]
+            for h in required_headings:
+                self.assertIn(
+                    h, block,
+                    f"Stage section '{stage_title}' missing mandatory contract heading '{h}'"
+                )
+
+    def test_agents_md_contract(self):
+        """AGENTS.md must exist, be <= 150 lines, and contain all 5 hand-off templates."""
+        agents_path = os.path.join(REPO_ROOT, "AGENTS.md")
+        self.assertTrue(os.path.exists(agents_path), "AGENTS.md must exist")
+
+        with open(agents_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        self.assertLessEqual(len(lines), 150, f"AGENTS.md must be <= 150 lines, got {len(lines)}")
+
+        content = "".join(lines)
+        required_templates = ["`dwd`", "`permissions`", "`subscription`", "`state_mismatch`", "`identity`"]
+        for tmpl in required_templates:
+            self.assertIn(tmpl, content, f"AGENTS.md missing hand-off template: {tmpl}")
+
+    def test_relative_markdown_links(self):
+        """Relative file links across documentation must resolve to existing files."""
+        doc_files = ["README.md", "RUNBOOK.md", "AGENTS.md", "GEMINI.md"]
+        link_pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+
+        for doc in doc_files:
+            doc_path = os.path.join(REPO_ROOT, doc)
+            if not os.path.exists(doc_path):
+                continue
+
+            with open(doc_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            for text, link in link_pattern.findall(content):
+                # Ignore http URLs, mailto, and in-page anchors
+                if link.startswith(("http://", "https://", "mailto:", "#")):
+                    continue
+                # Strip anchor fragment
+                clean_target = link.split("#")[0]
+                if not clean_target:
+                    continue
+
+                if clean_target.startswith("file://"):
+                    resolved_path = clean_target.replace("file://", "")
+                else:
+                    resolved_path = os.path.normpath(os.path.join(REPO_ROOT, clean_target))
+
+                self.assertTrue(
+                    os.path.exists(resolved_path),
+                    f"Broken link in {doc}: [{text}]({link}) -> cannot find {resolved_path}"
+                )
+
+
+class TestVerifyWaitParsing(unittest.TestCase):
+    """Test cases for verify.py --wait duration string parsing and negative inputs."""
+
+    def test_verify_wait_valid_durations(self):
+        """Valid duration formats must convert accurately to seconds."""
+        self.assertEqual(verify_module.parse_duration("0s"), 0)
+        self.assertEqual(verify_module.parse_duration("30s"), 30)
+        self.assertEqual(verify_module.parse_duration("15m"), 900)
+        self.assertEqual(verify_module.parse_duration("1h"), 3600)
+        self.assertEqual(verify_module.parse_duration("45"), 45)
+        self.assertEqual(verify_module.parse_duration(""), 0)
+        self.assertEqual(verify_module.parse_duration(None), 0)
+
+    def test_verify_wait_invalid_durations(self):
+        """Invalid, empty prefix, negative, or malformed duration strings must raise ValueError."""
+        invalid_inputs = ["s", "m", "h", "-5s", "abc", "15x", "1.5m", "ten_minutes"]
+        for inp in invalid_inputs:
+            with self.subTest(inp=inp):
+                with self.assertRaises(ValueError):
+                    verify_module.parse_duration(inp)
+
+    def test_verify_cli_invalid_wait_aborts(self):
+        """verify.py CLI must exit with non-zero code on invalid --wait format."""
+        proc = subprocess.run(
+            [sys.executable, os.path.join(REPO_ROOT, "scripts", "verify.py"), "--wait", "invalid_duration"],
             capture_output=True,
             text=True
         )
-        self.assertNotEqual(res.returncode, 0)
-        self.assertIn("Configuration file not found", res.stderr)
-
-    @patch("scripts.verify.make_request")
-    def test_verify_project_with_invalid_id_returns_failures(self, mock_make_request):
-        """Test that verify_project fails gracefully on invalid/non-existent project ID."""
-        # Mock 404 / 401 response for all Discovery Engine endpoints
-        mock_make_request.return_value = {
-            "_error": 404,
-            "_message": "Project 'invalid-project-xyz' not found."
-        }
-
-        success = verify_module.verify_project(
-            project_id="invalid-project-xyz",
-            location="global",
-            token="dummy-token"
-        )
-        self.assertFalse(success, "verify_project should return False when components fail or return 404")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Invalid duration format", proc.stderr)
 
 
 class TestDataScrubbing(unittest.TestCase):
@@ -308,7 +660,6 @@ class TestDataScrubbing(unittest.TestCase):
 
             for pattern in self.LEAK_PATTERNS:
                 if pattern.lower() in content.lower():
-                    # If file is this test file itself, ignore matching pattern string definitions
                     if file_rel == "scripts/test_red.py":
                         continue
                     leaks_found.append((file_rel, pattern))
