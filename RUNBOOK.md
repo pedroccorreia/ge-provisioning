@@ -124,12 +124,12 @@ stateDiagram-v2
 
 ---
 
-## Stage 2 — Workspace Domain-Wide Delegation Authorization
+## Stage 2 — Workspace & Atlassian Jira Authorization Gate
 
-**Owner:** Human (Workspace Super Admin Gate)
+**Owner:** Human (Workspace Super Admin & Atlassian Admin Gate)
 
 **Preconditions (machine-checkable):**
-- `make status` returns exit code 2 (`phase: 2, phase_name: "dwd_authorization"`).
+- `make status` returns exit code 2 (`phase: 2, phase_name: "dwd_authorization"` or `"jira_authorization"`).
 - Foundation projects and Discovery Engine service agents exist.
 
 **Do:**
@@ -148,34 +148,43 @@ stateDiagram-v2
      ```
    - Click **Authorize**.
 4. In Workspace Admin Console under **Security > Access and data control > API controls > Google Cloud Core Services**, allow access for the environment GCP project IDs if prompted.
-5. Signal completion by updating `terraform.tfvars`:
+5. If Atlassian Jira is enabled (`enable_jira_connector = true`):
+   - Run `make jira-checklist` to view the Jira instance URI, scopes, and OAuth callback URL.
+   - For OAuth 2.0 (3LO): Register app in [Atlassian Developer Console](https://developer.atlassian.com/console/myapps/) with callback `https://vertexaisearch.cloud.google.com/console/oauth/default_oauth.html` and required scopes (`read:jira-work`, `read:jira-user`, `offline_access`).
+   - For API Token: Generate token in Atlassian account security settings.
+   - Export credentials via `export TF_VAR_jira_auth='{"client_id":"...","client_secret":"..."}'` or `export TF_VAR_jira_auth='{"user_account":"...","api_token":"..."}'`.
+   - Update `jira_config.instance_uri` in `terraform.tfvars`.
+6. Signal completion by updating `terraform.tfvars`:
    ```hcl
    enable_connectors = true
    ```
 
 **Done when:**
 - `enable_connectors = true` is set in `terraform.tfvars`.
+- If `enable_jira_connector = true`, `jira_config.instance_uri` is non-empty and non-placeholder.
 - `make status` returns exit code 0 (`phase: 3, phase_name: "connectors_and_engines_apply"`).
 
 **If it fails:**
 - DWD authorization rejected by Admin Console: Verify executing human is a Workspace Super Admin and use the 21-digit numeric `client_id` from `make dwd-checklist`.
 - Incomplete scopes: Ensure all 9 required scopes are pasted without trailing spaces.
+- Jira OAuth/Token rejection: Verify Atlassian 3LO app redirect URI and scopes match `make jira-checklist`, and credentials in `TF_VAR_jira_auth` have access to the target Jira Cloud instance.
 
 **Checklist:**
 - [ ] Retrieved 21-digit numeric `client_id`, service agent email, and scope CSV via `make dwd-checklist`
 - [ ] Authorized DWD client for each environment in Google Workspace Admin Console
 - [ ] Allowed GCP projects under Google Cloud Core Services
+- [ ] Configured Jira OAuth app / API token via `make jira-checklist` (if Jira enabled)
 - [ ] Flipped `enable_connectors = true` in `terraform.tfvars`
 
 ---
 
-## Stage 3 — Workspace Connectors, Search Engines & Assistants
+## Stage 3 — Workspace & Jira Connectors, Search Engines & Assistants
 
 **Owner:** Agent (after Stage 2 Human Gate)
 
 **Preconditions (machine-checkable):**
 - `make status` returns exit code 0 (`phase: 3, phase_name: "connectors_and_engines_apply"`).
-- `enable_connectors` is `true` in `terraform.tfvars`.
+- `enable_connectors` is `true` in `terraform.tfvars` (or `enable_jira_connector` with configured URI).
 
 **Do:**
 1. Generate and guard the connectors plan:
@@ -190,17 +199,21 @@ stateDiagram-v2
 **Done when:**
 - `terraform output -json search_engine_names` contains all configured environments.
 - `terraform output -json assistant_names` contains all configured environments.
+- All provisioned connectors (Workspace and/or Jira) exist in state.
 - Re-plan produces zero diff.
 
 **If it fails:**
 - Connector creation fails with `PERMISSION_DENIED` or `unauthorized_client`: Domain-Wide Delegation OAuth tokens can take up to 5–15 minutes to propagate. Wait 5 minutes and retry `make apply-connectors`.
+- Jira connector fails with authentication/network error: Verify Jira instance URI is reachable, allowlist static IPs if enabled, and verify `TF_VAR_jira_auth`.
+- If permission failure persists after 15 minutes: Escalate with the **dwd** or **jira** template to re-verify Client ID and scope entries.
 - `google_discovery_engine_assistant.default` fails with `409 Already Exists`: Provisioning a search engine with `SEARCH_ADD_ON_LLM` automatically creates `default_assistant`. Import it into state (`terraform import 'google_discovery_engine_assistant.default["<env>"]' projects/<PROJECT_ID>/locations/global/collections/default_collection/engines/<ENGINE_ID>/assistants/default_assistant`) and re-run `make plan-connectors && make apply-connectors`.
 - If permission failure persists after 15 minutes: Escalate with the **dwd** template to re-verify Client ID and scope entries.
 
 **Checklist:**
 - [ ] `make plan-connectors` generated `.plans/connectors.tfplan` with 0 deletes/replaces
 - [ ] Workspace data connectors provisioned (`google_mail`, `google_calendar`, `google_drive`, `google_chat`)
-- [ ] Unified Search Engine provisioned for each environment
+- [ ] Atlassian Jira connector provisioned with multi-entity data stores (if enabled)
+- [ ] Unified Search Engine provisioned for each environment with flattened connector data stores
 - [ ] Governed Gemini Enterprise Assistant provisioned with web grounding
 - [ ] Engine-scoped IAM permissions granted to User Cloud Identity Groups
 

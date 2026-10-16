@@ -49,7 +49,7 @@ variable "workspace_admin_email" {
 
 variable "folder_id" {
   type        = string
-  description = "The ID of the GCP Folder where the projects should be created (optional)"
+  description = "The ID of the GCP Folder where projects should be created (optional). If omitted, null, or empty string (\"\"), projects are provisioned directly at the root of the Organization."
   default     = null
 }
 
@@ -72,7 +72,7 @@ variable "billing_project" {
 
 variable "sa_email" {
   type        = string
-  description = "The email address of the GCP service account used for provisioning (optional)"
+  description = "The email address of a custom GCP service account for provisioning (optional). When omitted or null/empty, active Application Default Credentials (ADC) are used and custom SA IAM grant is skipped."
   default     = null
 }
 
@@ -125,4 +125,57 @@ variable "subscription_tier" {
   type        = string
   description = "The Gemini Enterprise subscription tier"
   default     = "Gemini Enterprise Standard"
+}
+
+variable "enable_jira_connector" {
+  type        = bool
+  description = "Whether to provision the Atlassian Jira Discovery Engine data connector. Set to true after Jira OAuth/API credentials are configured."
+  default     = false
+}
+
+variable "jira_auth_type" {
+  type        = string
+  description = "Authentication method for Jira connector: 'OAUTH2' or 'API_TOKEN'"
+  default     = "OAUTH2"
+
+  validation {
+    condition     = contains(["OAUTH2", "API_TOKEN"], var.jira_auth_type)
+    error_message = "jira_auth_type must be either 'OAUTH2' or 'API_TOKEN'."
+  }
+}
+
+variable "jira_auth" {
+  type = object({
+    user_account  = optional(string, "")
+    api_token     = optional(string, "")
+    client_id     = optional(string, "")
+    client_secret = optional(string, "")
+  })
+  description = "Sensitive authentication credentials for Jira connector (pass via TF_VAR_jira_auth environment variable)"
+  default     = {}
+  sensitive   = true
+}
+
+variable "jira_config" {
+  type = object({
+    instance_uri                 = optional(string, "")
+    data_source                  = optional(string, "jira")
+    data_source_version          = optional(number, 3)
+    connector_modes              = optional(list(string), ["DATA_INGESTION"])
+    sync_mode                    = optional(string, "PERIODIC")
+    refresh_interval             = optional(string, "86400s")
+    incremental_refresh_interval = optional(string, "10800s")
+    entities                     = optional(list(string), ["project", "issue", "attachment", "comment", "worklog"])
+    static_ip_enabled            = optional(bool, false)
+    enable_actions               = optional(bool, false)
+    enabled_actions              = optional(list(string), ["create_issue", "update_issue", "change_issue_status", "create_comment", "update_comment", "upload_attachment"])
+    extra_params                 = optional(map(string), {})
+  })
+  description = "Configuration for the Atlassian Jira data connector"
+  default     = {}
+
+  validation {
+    condition     = contains(["jira", "jira_server"], coalesce(var.jira_config.data_source, "jira"))
+    error_message = "jira_config.data_source must be 'jira' or 'jira_server'."
+  }
 }

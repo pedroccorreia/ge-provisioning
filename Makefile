@@ -1,4 +1,4 @@
-.PHONY: status plan-foundation apply-foundation dwd-checklist plan-connectors apply-connectors licenses-dryrun licenses licenses-list verify test help
+.PHONY: status plan-foundation apply-foundation dwd-checklist jira-checklist plan-connectors apply-connectors licenses-dryrun licenses licenses-list verify test help
 
 WAIT ?= 15m
 
@@ -8,6 +8,7 @@ help:
 	@echo "  plan-foundation   - Generate Stage 1 Foundation plan with plan guard"
 	@echo "  apply-foundation  - Apply Stage 1 Foundation plan (0 deletes/replaces)"
 	@echo "  dwd-checklist     - Print Google Workspace Domain-Wide Delegation authorization checklist"
+	@echo "  jira-checklist    - Print Atlassian Jira connector onboarding checklist"
 	@echo "  plan-connectors   - Generate Stage 3 Connectors & Engines plan with plan guard"
 	@echo "  apply-connectors  - Apply Stage 3 Connectors & Engines plan"
 	@echo "  licenses-dryrun   - Dry-run license distribution preflight assertions"
@@ -31,9 +32,12 @@ apply-foundation:
 dwd-checklist:
 	@python3 scripts/status.py --dwd-checklist
 
+jira-checklist:
+	@terraform output -json jira_checklist | python3 -m json.tool
+
 plan-connectors:
 	@mkdir -p .plans
-	terraform plan -input=false -var="enable_connectors=true" -out=.plans/connectors.tfplan
+	terraform plan -input=false -out=.plans/connectors.tfplan
 	python3 scripts/plan_guard.py .plans/connectors.tfplan
 
 apply-connectors:

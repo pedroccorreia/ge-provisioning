@@ -9,10 +9,10 @@ workspace_admin_email = "admin@example.com"
 
 # Google Cloud Resource Hierarchy & Billing
 billing_account = "0X1XXX-XXXXXX-XXXXXX"
-billing_project = "example-bootstrap"
-folder_id       = "123456789012"
-org_id          = null
-sa_email        = "gemini-provisioner@example-bootstrap.iam.gserviceaccount.com"
+billing_project = null # Optional: Project ID for API quota & billing overrides. Omit or set to null to use caller's default project.
+folder_id       = null # Optional: GCP Folder ID. If omitted or null, projects are created directly at the root of the Organization.
+org_id          = null # Optional: GCP Organization ID (used if folder_id is null/omitted).
+sa_email        = null # Optional: Custom provisioner service account email. If omitted or null, active Application Default Credentials (ADC) are used.
 
 # Discovery Engine & Workspace Connectors
 location             = "global"
@@ -32,3 +32,25 @@ seat_allocations = {
 license_config_id = "00000000-0000-0000-0000-000000000000"
 subscription_id   = "00000000-0000-0000-0000-000000000000"
 subscription_tier = "Gemini Enterprise Standard"
+
+# Atlassian Jira Connector (optional)
+enable_jira_connector = false
+jira_auth_type        = "OAUTH2"
+
+jira_config = {
+  instance_uri                 = "https://example.atlassian.net"
+  data_source                  = "jira"
+  data_source_version          = 3
+  sync_mode                    = "PERIODIC"
+  refresh_interval             = "86400s"
+  incremental_refresh_interval = "10800s"
+  entities                     = ["project", "issue", "attachment", "comment", "worklog"]
+  static_ip_enabled            = false
+  enable_actions               = false
+  enabled_actions              = ["create_issue", "update_issue", "change_issue_status", "create_comment", "update_comment", "upload_attachment"]
+}
+
+# Note: Sensitive credentials should be passed via TF_VAR_jira_auth environment variable, e.g.:
+# export TF_VAR_jira_auth='{"client_id":"...","client_secret":"..."}'  # for OAUTH2
+# or
+# export TF_VAR_jira_auth='{"user_account":"user@example.com","api_token":"..."}'  # for API_TOKEN

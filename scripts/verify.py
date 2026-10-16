@@ -103,10 +103,34 @@ def check_data_connectors(project_id, location, token):
         found_connectors = True
         state = c_res.get("state", "UNKNOWN")
         data_source = c_res.get("dataSource", col_id)
-        results.append((f"Connector ({data_source})", state, f"Collection: {col_id}"))
+        realtime_state = c_res.get("realtimeState")
+        action_state = c_res.get("actionState")
+        blocking_reasons = c_res.get("blockingReasons", [])
+        entities = c_res.get("entities", [])
+        errors = c_res.get("errors", [])
+
+        details_parts = [f"Collection: {col_id}"]
+        if entities:
+            details_parts.append(f"Entities: {len(entities)}")
+        if realtime_state:
+            details_parts.append(f"Realtime: {realtime_state}")
+        if action_state:
+            details_parts.append(f"ActionState: {action_state}")
+        if blocking_reasons:
+            details_parts.append(f"Blocking: {','.join(blocking_reasons)}")
+        if errors:
+            details_parts.append(f"Errors: {len(errors)}")
+
+        status = state
+        if errors or state in ("FAILED", "ERROR", "INITIALIZATION_FAILED") or "FAIL" in state:
+            status = "ERROR"
+        elif blocking_reasons or state in ("PAUSED", "INITIALIZING"):
+            status = "WARN"
+
+        results.append((f"Connector ({data_source})", status, ", ".join(details_parts)))
 
     if not found_connectors:
-        results.append(("Data Connectors", "WARN", "No active data connectors found (enable_connectors may be false)"))
+        results.append(("Data Connectors", "WARN", "No active data connectors found (enable_connectors or enable_jira_connector may be false)"))
 
     return results
 

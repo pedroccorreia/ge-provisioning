@@ -1,6 +1,6 @@
 # Gemini Enterprise Customer Provisioning IaC
 
-This repository contains production-grade Terraform Infrastructure as Code (IaC) and automation tooling to provision and configure Gemini Enterprise (Vertex AI Search) with Google Workspace connectors.
+This repository contains production-grade Terraform Infrastructure as Code (IaC) and automation tooling to provision and configure Gemini Enterprise (Vertex AI Search) with Google Workspace and Atlassian Jira connectors.
 
 It deploys:
 - **Dedicated GCP Projects** per configurable customer environment (e.g. `non-prod`, `prod`, `dev`, `pilot`).
@@ -9,6 +9,7 @@ It deploys:
 - **Cloud Identity User Groups** and IAM search engine role bindings (`roles/discoveryengine.user`).
 - **User Store with Auto-Registration** (`google_discovery_engine_user_store`).
 - **Federated Workspace Connectors** (`google_mail`, `google_calendar`, `google_drive`, `google_chat`).
+- **Atlassian Jira Data Connector** with multi-entity data stores (`project`, `issue`, `attachment`, `comment`, `worklog`) and optional Action/BAP integration.
 - **Unified Intranet Search App & Governed Assistant** (`google_discovery_engine_search_engine`, `google_discovery_engine_assistant`).
 - **Automated Seat Distribution & Verification** tooling via `Makefile`.
 
@@ -18,9 +19,10 @@ It deploys:
 
 ```mermaid
 flowchart TD
-  subgraph Customer["Customer Google Workspace Tenant"]
+  subgraph Customer["Customer Identity & Third-Party Tenants"]
     WSGroup["Cloud Identity Group<br/><code>{customer}-{env}-users@{domain}</code>"]
     WSAdmin["Google Workspace Admin Console<br/>(DWD API Client Authorization)"]
+    JiraTenant["Atlassian Jira Cloud<br/>(OAuth 2.0 3LO / API Token)"]
   end
 
   subgraph GCPFoundation["GCP Customer Environment Project ({customer}-{env})"]
@@ -30,18 +32,21 @@ flowchart TD
     UStore["User Store: default_user_store<br/>(Auto-Register: ON)"]
   end
 
-  subgraph ConnectorsAndEngine["Workspace Connectors & Search Engine"]
+  subgraph ConnectorsAndEngine["Workspace & Jira Connectors & Search Engine"]
     Conn1["Gmail Connector"]
     Conn2["Calendar Connector"]
     Conn3["Drive Connector"]
     Conn4["Chat Connector"]
+    ConnJira["Jira Connector<br/>(project, issue, comment, attachment, worklog)"]
     Engine["Search App: {customer}-{env}-search-engine"]
     Assist["Governed Assistant: default_assistant"]
   end
 
   WSAdmin -.->|Authorizes Scopes| SAgent
+  JiraTenant -.->|OAuth 2.0 / Token| ConnJira
   SAgent --> Conn1 & Conn2 & Conn3 & Conn4
   Conn1 & Conn2 & Conn3 & Conn4 --> Engine
+  ConnJira --> Engine
   Engine --> Assist
   WSGroup -->|roles/discoveryengine.user| Engine
 ```
@@ -163,6 +168,7 @@ make status            # Check live phase and identify blockers
 make plan-foundation   # Stage 1: Generate foundation plan with safety guard
 make apply-foundation  # Stage 1: Apply foundation infrastructure
 make dwd-checklist     # Stage 2: Display Workspace DWD authorization details
+make jira-checklist    # Stage 2: Display Atlassian Jira authorization details
 make plan-connectors   # Stage 3: Generate connectors plan with safety guard
 make apply-connectors  # Stage 3: Apply connectors, engines & assistants
 make licenses-dryrun   # Stage 4: Verify seat distribution preflight assertions

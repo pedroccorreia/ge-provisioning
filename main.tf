@@ -62,17 +62,62 @@ locals {
   ]...)
 
   # Workspace connectors per environment (when enabled)
-  environment_connectors = var.enable_connectors ? {
+  workspace_environment_connectors = var.enable_connectors ? {
     for pair in setproduct(keys(local.environments), tolist(var.workspace_connectors)) :
     "${pair[0]}-${pair[1]}" => {
-      env_key       = pair[0]
-      connector     = pair[1]
-      data_source   = pair[1]
-      display_name  = lookup(local.connector_meta, pair[1], { display_name = title(replace(pair[1], "_", " ")), service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).display_name
-      collection_id = lookup(local.connector_meta, pair[1], { display_name = "", service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).collection
-      project_id    = google_project.projects[pair[0]].project_id
+      env_key                      = pair[0]
+      connector                    = pair[1]
+      data_source                  = pair[1]
+      data_source_version          = null
+      display_name                 = lookup(local.connector_meta, pair[1], { display_name = title(replace(pair[1], "_", " ")), service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).display_name
+      collection_id                = lookup(local.connector_meta, pair[1], { display_name = "", service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).collection
+      project_id                   = google_project.projects[pair[0]].project_id
+      entities                     = [pair[1]]
+      connector_modes              = ["FEDERATED"]
+      sync_mode                    = null
+      refresh_interval             = "0s"
+      incremental_refresh_interval = null
+      static_ip_enabled            = null
+      params                       = {}
+      enable_actions               = false
+      enabled_actions              = []
+      instance_uri                 = ""
     }
   } : {}
+
+  # Atlassian Jira connector per environment (when enabled)
+  jira_environment_connectors = var.enable_jira_connector ? {
+    for env_key, env_val in local.environments :
+    "${env_key}-jira" => {
+      env_key                      = env_key
+      connector                    = "jira"
+      data_source                  = coalesce(var.jira_config.data_source, "jira")
+      data_source_version          = var.jira_config.data_source_version
+      display_name                 = "Atlassian Jira"
+      collection_id                = "jira-collection"
+      project_id                   = google_project.projects[env_key].project_id
+      entities                     = coalesce(var.jira_config.entities, ["project", "issue", "attachment", "comment", "worklog"])
+      connector_modes              = coalesce(var.jira_config.enable_actions, false) ? distinct(concat(coalesce(var.jira_config.connector_modes, ["DATA_INGESTION"]), ["ACTIONS"])) : coalesce(var.jira_config.connector_modes, ["DATA_INGESTION"])
+      sync_mode                    = var.jira_config.sync_mode
+      refresh_interval             = coalesce(var.jira_config.refresh_interval, "86400s")
+      incremental_refresh_interval = var.jira_config.incremental_refresh_interval
+      static_ip_enabled            = var.jira_config.static_ip_enabled
+      instance_uri                 = coalesce(var.jira_config.instance_uri, "")
+      params = merge(
+        var.jira_config.instance_uri != "" ? { "instance_uri" = var.jira_config.instance_uri } : {},
+        { "auth_type" = var.jira_auth_type },
+        var.jira_auth.client_id != "" ? { "client_id" = var.jira_auth.client_id } : {},
+        var.jira_auth.client_secret != "" ? { "client_secret" = var.jira_auth.client_secret } : {},
+        var.jira_auth.user_account != "" ? { "user_account" = var.jira_auth.user_account } : {},
+        var.jira_auth.api_token != "" ? { "api_token" = var.jira_auth.api_token } : {},
+        coalesce(var.jira_config.extra_params, {})
+      )
+      enable_actions  = coalesce(var.jira_config.enable_actions, false)
+      enabled_actions = coalesce(var.jira_config.enabled_actions, [])
+    }
+  } : {}
+
+  environment_connectors = merge(local.workspace_environment_connectors, local.jira_environment_connectors)
 
   # Domain-Wide Delegation OAuth scopes required for Workspace connectors & user directory
   dwd_scopes = [
@@ -86,6 +131,11 @@ locals {
     "https://www.googleapis.com/auth/chat.messages.readonly",
     "https://www.googleapis.com/auth/chat.memberships.readonly"
   ]
+
+  # Normalized optional parameters
+  effective_sa_email  = trimspace(coalesce(var.sa_email, "")) != "" ? trimspace(var.sa_email) : null
+  effective_folder_id = trimspace(coalesce(var.folder_id, "")) != "" ? trimspace(var.folder_id) : null
+  effective_org_id    = local.effective_folder_id == null && trimspace(coalesce(var.org_id, "")) != "" ? trimspace(var.org_id) : null
 }
 
 # 0. Provision GCP Projects per Customer Environment
@@ -93,8 +143,8 @@ resource "google_project" "projects" {
   for_each        = local.environments
   name            = substr("${var.customer_name} ${each.value.display_name}", 0, 30)
   project_id      = each.value.project_id
-  folder_id       = var.folder_id
-  org_id          = var.folder_id == null ? var.org_id : null
+  folder_id       = local.effective_folder_id
+  org_id          = local.effective_org_id
   billing_account = var.billing_account
   deletion_policy = contains(["prod", "production"], lower(each.key)) ? "PREVENT" : "DELETE"
 }
@@ -119,10 +169,10 @@ resource "google_project_service_identity" "discoveryengine_sa" {
 
 # Optional Provisioner Service Account IAM binding
 resource "google_project_iam_member" "sa_discoveryengine_admin" {
-  for_each = var.sa_email != null ? local.environments : {}
+  for_each = local.effective_sa_email != null ? local.environments : {}
   project  = google_project.projects[each.key].project_id
   role     = "roles/discoveryengine.admin"
-  member   = "serviceAccount:${var.sa_email}"
+  member   = "serviceAccount:${local.effective_sa_email}"
 
   depends_on = [google_project_service.services]
 }
@@ -176,20 +226,53 @@ resource "google_discovery_engine_user_store" "default" {
   ]
 }
 
-# 5. Provision Workspace Data Connectors per Customer Environment Project (Staged)
+# 5. Provision Workspace & Third-Party Data Connectors per Customer Environment Project (Staged)
 resource "google_discovery_engine_data_connector" "connectors" {
-  for_each                = local.environment_connectors
-  project                 = each.value.project_id
-  location                = var.location
-  collection_id           = each.value.collection_id
-  collection_display_name = "${each.value.display_name} Collection"
-  data_source             = each.value.data_source
-  params                  = {}
-  refresh_interval        = "0s"
-  connector_modes         = ["FEDERATED"]
+  for_each                     = local.environment_connectors
+  project                      = each.value.project_id
+  location                     = var.location
+  collection_id                = each.value.collection_id
+  collection_display_name      = "${each.value.display_name} Collection"
+  data_source                  = each.value.data_source
+  data_source_version          = each.value.data_source_version
+  params                       = each.value.params
+  refresh_interval             = each.value.refresh_interval
+  incremental_refresh_interval = each.value.incremental_refresh_interval
+  sync_mode                    = each.value.sync_mode
+  static_ip_enabled            = each.value.static_ip_enabled
+  connector_modes              = each.value.connector_modes
 
-  entities {
-    entity_name = each.value.data_source
+  dynamic "entities" {
+    for_each = each.value.entities
+    content {
+      entity_name = entities.value
+    }
+  }
+
+  dynamic "destination_configs" {
+    for_each = each.value.instance_uri != "" ? [each.value.instance_uri] : []
+    content {
+      key = "url"
+      destinations {
+        host = destination_configs.value
+      }
+    }
+  }
+
+  dynamic "action_config" {
+    for_each = each.value.enable_actions ? [1] : []
+    content {
+      create_bap_connection = true
+      action_params         = each.value.params
+    }
+  }
+
+  dynamic "bap_config" {
+    for_each = each.value.enable_actions ? [1] : []
+    content {
+      enabled_actions           = each.value.enabled_actions
+      supported_connector_modes = ["ACTIONS"]
+    }
   }
 
   depends_on = [
@@ -201,7 +284,7 @@ resource "google_discovery_engine_data_connector" "connectors" {
 
 # 6. Provision Unified Gemini Enterprise Search App per Customer Environment Project
 resource "google_discovery_engine_search_engine" "engines" {
-  for_each          = var.enable_connectors ? local.environments : {}
+  for_each          = (var.enable_connectors || var.enable_jira_connector) ? local.environments : {}
   project           = google_project.projects[each.key].project_id
   location          = var.location
   collection_id     = "default_collection"
@@ -210,10 +293,13 @@ resource "google_discovery_engine_search_engine" "engines" {
   industry_vertical = "GENERIC"
   app_type          = "APP_TYPE_INTRANET"
 
-  data_store_ids = [
-    for connector_type in var.workspace_connectors :
-    basename(google_discovery_engine_data_connector.connectors["${each.key}-${connector_type}"].entities[0].data_store)
-  ]
+  data_store_ids = flatten([
+    for conn_key, conn in local.environment_connectors : [
+      for entity in google_discovery_engine_data_connector.connectors[conn_key].entities :
+      basename(entity.data_store)
+    ]
+    if conn.env_key == each.key
+  ])
 
   search_engine_config {
     search_tier    = "SEARCH_TIER_STANDARD"
@@ -227,7 +313,7 @@ resource "google_discovery_engine_search_engine" "engines" {
 
 # 7. Grant End-User Search Access Scoped to the Engine
 resource "google_discovery_engine_search_engine_iam_member" "users" {
-  for_each      = var.enable_connectors ? local.environments : {}
+  for_each      = (var.enable_connectors || var.enable_jira_connector) ? local.environments : {}
   project       = google_project.projects[each.key].project_id
   location      = var.location
   collection_id = google_discovery_engine_search_engine.engines[each.key].collection_id
@@ -238,7 +324,7 @@ resource "google_discovery_engine_search_engine_iam_member" "users" {
 
 # 8. Provision Governed Gemini Enterprise Assistant
 resource "google_discovery_engine_assistant" "default" {
-  for_each           = var.enable_connectors ? local.environments : {}
+  for_each           = (var.enable_connectors || var.enable_jira_connector) ? local.environments : {}
   project            = google_project.projects[each.key].project_id
   location           = var.location
   collection_id      = google_discovery_engine_search_engine.engines[each.key].collection_id

@@ -313,7 +313,7 @@ class TestStatusPhaseDetection(unittest.TestCase):
                     f.write(f'{k} = "{v}"\n')
         return tfvars_path
 
-    def _create_state(self, project_ids=None, search_engines=None, assistants=None, foreign_projects=None):
+    def _create_state(self, project_ids=None, search_engines=None, assistants=None, foreign_projects=None, connectors=None):
         state_path = os.path.join(self.temp_dir.name, "terraform.tfstate")
         state_data = {
             "version": 4,
@@ -330,6 +330,19 @@ class TestStatusPhaseDetection(unittest.TestCase):
                     "name": "projects",
                     "instances": [{"attributes": {"project_id": fpid}}]
                 })
+
+        if connectors:
+            instances = []
+            for c_key in connectors:
+                instances.append({
+                    "index_key": c_key,
+                    "attributes": {"data_source": c_key.split("-")[-1]}
+                })
+            state_data["resources"].append({
+                "type": "google_discovery_engine_data_connector",
+                "name": "connectors",
+                "instances": instances
+            })
 
         # Add outputs
         if project_ids:
@@ -510,6 +523,279 @@ class TestStatusPhaseDetection(unittest.TestCase):
         self.assertEqual(status["phase"], 4)
         self.assertEqual(status["handoff_template"], "subscription")
 
+    def test_status_phase_2_jira_human_gate_when_instance_uri_placeholder(self):
+        """enable_jira_connector=true with missing or placeholder instance_uri must trigger Stage 2 jira gate (exit 2)."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": True,
+            "enable_jira_connector": True,
+            "jira_config": {
+                "instance_uri": "https://example.atlassian.net",
+                "data_source": "jira"
+            }
+        })
+        state_path = self._create_state(project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"})
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 2)
+        self.assertEqual(status["phase"], 2)
+        self.assertEqual(status["handoff_template"], "jira")
+        self.assertIn("jira", status["blockers"][0].lower())
+
+    def test_status_phase_2_jira_only_gate_when_workspace_connectors_disabled(self):
+        """Jira-only deployment (enable_connectors=false, enable_jira_connector=true) with placeholder URI must trigger jira gate, NOT DWD gate."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": False,
+            "enable_jira_connector": True,
+            "jira_config": {
+                "instance_uri": "https://example.atlassian.net",
+                "data_source": "jira"
+            }
+        })
+        state_path = self._create_state(project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"})
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 2)
+        self.assertEqual(status["phase"], 2)
+        self.assertEqual(status["handoff_template"], "jira")
+        self.assertIn("jira", status["blockers"][0].lower())
+
+    def test_status_phase_3_ready_jira_only_with_valid_uri(self):
+        """Jira-only deployment (enable_connectors=false, enable_jira_connector=true) with valid URI must advance to Phase 3 (exit 0)."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": False,
+            "enable_jira_connector": True,
+            "jira_config": {
+                "instance_uri": "https://custom-team.atlassian.net",
+                "data_source": "jira"
+            }
+        })
+        state_path = self._create_state(project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"})
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 0)
+        self.assertEqual(status["phase"], 3)
+        self.assertEqual(status["phase_name"], "connectors_and_engines_apply")
+
+    def test_status_phase_3_ready_with_valid_jira(self):
+        """enable_jira_connector=true and enable_connectors=true with valid instance_uri must indicate Stage 3 ready (exit 0)."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["non-prod", "prod"],
+            "enable_connectors": True,
+            "enable_jira_connector": True,
+            "jira_config": {
+                "instance_uri": "https://custom-team.atlassian.net",
+                "data_source": "jira"
+            }
+        })
+        state_path = self._create_state(project_ids={"non-prod": "testcust-non-prod", "prod": "testcust-prod"})
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 0)
+        self.assertEqual(status["phase"], 3)
+        self.assertEqual(status["phase_name"], "connectors_and_engines_apply")
+
+    def test_status_phase_3_stays_when_jira_connector_missing_from_state(self):
+        """When workspace connectors exist in state but jira connector is missing, status must stay in Phase 3."""
+        tfvars_path = self._create_tfvars({
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "environments": ["prod"],
+            "enable_connectors": True,
+            "enable_jira_connector": True,
+            "jira_config": {
+                "instance_uri": "https://custom-team.atlassian.net",
+                "data_source": "jira"
+            }
+        })
+        # State has project_ids, search_engines, assistants, and workspace data_connector_names, but no prod-jira
+        state_path = self._create_state(
+            project_ids={"prod": "testcust-prod"},
+            search_engines={"prod": "projects/123/locations/global/collections/default_collection/engines/engine-1"},
+            assistants={"prod": "projects/123/locations/global/collections/default_collection/engines/engine-1/assistants/default_assistant"}
+        )
+        # Add data_connector_names output with only prod-google_mail
+        with open(state_path, "r", encoding="utf-8") as f:
+            st = json.load(f)
+        st["outputs"]["data_connector_names"] = {
+            "value": {
+                "prod-google_mail": "projects/123/locations/global/collections/mail-col/dataConnector"
+            }
+        }
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+
+        status = status_module.determine_status(
+            workdir=self.temp_dir.name,
+            tfvars_path=tfvars_path,
+            state_path=state_path,
+            skip_auth_check=True
+        )
+        self.assertEqual(status["exit_code"], 0)
+        self.assertEqual(status["phase"], 3)
+        self.assertEqual(status["phase_name"], "connectors_and_engines_apply")
+
+
+class TestVerifyConnectors(unittest.TestCase):
+    """Test cases for verify.py multi-entity and third-party data connector inspection."""
+
+    @patch("scripts.verify.make_request")
+    def test_verify_check_data_connectors_multi_entity_jira(self, mock_make_request):
+        """check_data_connectors must inspect multi-entity Jira connector and surface entities count."""
+        def side_effect(url, **kwargs):
+            if url.endswith("/collections"):
+                return {
+                    "collections": [
+                        {"name": "projects/test-proj/locations/global/collections/jira-collection"}
+                    ]
+                }
+            elif url.endswith("/dataConnector"):
+                return {
+                    "name": "projects/test-proj/locations/global/collections/jira-collection/dataConnector",
+                    "dataSource": "jira",
+                    "state": "STATE_ACTIVE",
+                    "realtimeState": "STATE_ACTIVE",
+                    "actionState": "STATE_ACTIVE",
+                    "entities": [
+                        {"entityName": "project"},
+                        {"entityName": "issue"},
+                        {"entityName": "attachment"},
+                        {"entityName": "comment"},
+                        {"entityName": "worklog"}
+                    ]
+                }
+            return {}
+
+        mock_make_request.side_effect = side_effect
+
+        results = verify_module.check_data_connectors("test-proj", "global", "mock-token")
+        self.assertEqual(len(results), 1)
+        component, status, details = results[0]
+        self.assertIn("Connector (jira)", component)
+        self.assertEqual(status, "STATE_ACTIVE")
+        self.assertIn("Entities: 5", details)
+        self.assertIn("Realtime: STATE_ACTIVE", details)
+        self.assertIn("ActionState: STATE_ACTIVE", details)
+
+    @patch("scripts.verify.make_request")
+    def test_verify_check_data_connectors_surfaces_errors_and_blocking(self, mock_make_request):
+        """check_data_connectors must report ERROR status when connector errors exist and display blocking reasons."""
+        def side_effect(url, **kwargs):
+            if url.endswith("/collections"):
+                return {
+                    "collections": [
+                        {"name": "projects/test-proj/locations/global/collections/jira-collection"}
+                    ]
+                }
+            elif url.endswith("/dataConnector"):
+                return {
+                    "name": "projects/test-proj/locations/global/collections/jira-collection/dataConnector",
+                    "dataSource": "jira",
+                    "state": "STATE_ACTIVE",
+                    "blockingReasons": ["ALLOWLIST_STATIC_IP"],
+                    "errors": [{"code": 401, "message": "Unauthorized"}]
+                }
+            return {}
+
+    @patch("scripts.verify.make_request")
+    def test_verify_check_data_connectors_warns_on_blocking_reasons_without_errors(self, mock_make_request):
+        """check_data_connectors must report WARN status when connector has blockingReasons (e.g. ALLOWLIST_STATIC_IP) but no errors."""
+        def side_effect(url, **kwargs):
+            if url.endswith("/collections"):
+                return {
+                    "collections": [
+                        {"name": "projects/test-proj/locations/global/collections/jira-collection"}
+                    ]
+                }
+            elif url.endswith("/dataConnector"):
+                return {
+                    "name": "projects/test-proj/locations/global/collections/jira-collection/dataConnector",
+                    "dataSource": "jira",
+                    "state": "STATE_ACTIVE",
+                    "blockingReasons": ["ALLOWLIST_STATIC_IP"],
+                    "errors": []
+                }
+            return {}
+
+        mock_make_request.side_effect = side_effect
+
+        results = verify_module.check_data_connectors("test-proj", "global", "mock-token")
+        self.assertEqual(len(results), 1)
+        component, status, details = results[0]
+        self.assertEqual(status, "WARN")
+        self.assertIn("Blocking: ALLOWLIST_STATIC_IP", details)
+
+    @patch("scripts.verify.make_request")
+    def test_verify_check_data_connectors_initialization_failed_reports_error(self, mock_make_request):
+        """check_data_connectors must report ERROR status when connector state is INITIALIZATION_FAILED."""
+        def side_effect(url, **kwargs):
+            if url.endswith("/collections"):
+                return {
+                    "collections": [
+                        {"name": "projects/test-proj/locations/global/collections/jira-collection"}
+                    ]
+                }
+            elif url.endswith("/dataConnector"):
+                return {
+                    "name": "projects/test-proj/locations/global/collections/jira-collection/dataConnector",
+                    "dataSource": "jira",
+                    "state": "INITIALIZATION_FAILED",
+                    "errors": []
+                }
+            return {}
+
+        mock_make_request.side_effect = side_effect
+
+        results = verify_module.check_data_connectors("test-proj", "global", "mock-token")
+        self.assertEqual(len(results), 1)
+        component, status, details = results[0]
+        self.assertEqual(status, "ERROR")
+
 
 class TestDocumentationContracts(unittest.TestCase):
     """Test compliance with documentation and agent protocol contracts."""
@@ -552,7 +838,7 @@ class TestDocumentationContracts(unittest.TestCase):
         self.assertLessEqual(len(lines), 150, f"AGENTS.md must be <= 150 lines, got {len(lines)}")
 
         content = "".join(lines)
-        required_templates = ["`dwd`", "`permissions`", "`subscription`", "`state_mismatch`", "`identity`"]
+        required_templates = ["`dwd`", "`jira`", "`permissions`", "`subscription`", "`state_mismatch`", "`identity`"]
         for tmpl in required_templates:
             self.assertIn(tmpl, content, f"AGENTS.md missing hand-off template: {tmpl}")
 
@@ -587,6 +873,38 @@ class TestDocumentationContracts(unittest.TestCase):
                     os.path.exists(resolved_path),
                     f"Broken link in {doc}: [{text}]({link}) -> cannot find {resolved_path}"
                 )
+
+
+class TestTerraformDefaultsContract(unittest.TestCase):
+    """Test contract for optional folder_id (defaulting to Organization root) and sa_email (defaulting to ADC)."""
+
+    def test_tfvars_example_defaults_folder_and_sa_null(self):
+        """terraform.tfvars.example must default folder_id, sa_email, and billing_project to null."""
+        tfvars_example_path = os.path.join(REPO_ROOT, "terraform.tfvars.example")
+        self.assertTrue(os.path.exists(tfvars_example_path))
+
+        with open(tfvars_example_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertTrue(re.search(r'^\s*folder_id\s*=\s*null\b', content, re.MULTILINE), "folder_id must default to null in terraform.tfvars.example")
+        self.assertTrue(re.search(r'^\s*sa_email\s*=\s*null\b', content, re.MULTILINE), "sa_email must default to null in terraform.tfvars.example")
+        self.assertTrue(re.search(r'^\s*billing_project\s*=\s*null\b', content, re.MULTILINE), "billing_project must default to null in terraform.tfvars.example")
+
+    def test_main_tf_handles_empty_or_null_folder_and_sa(self):
+        """main.tf must normalize empty/null folder_id to Organization root and skip custom SA IAM grant."""
+        main_tf_path = os.path.join(REPO_ROOT, "main.tf")
+        self.assertTrue(os.path.exists(main_tf_path))
+
+        with open(main_tf_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("effective_folder_id = trimspace(coalesce(var.folder_id, \"\")) != \"\" ? trimspace(var.folder_id) : null", content)
+        self.assertIn("effective_org_id    = local.effective_folder_id == null && trimspace(coalesce(var.org_id, \"\")) != \"\" ? trimspace(var.org_id) : null", content)
+        self.assertIn("effective_sa_email  = trimspace(coalesce(var.sa_email, \"\")) != \"\" ? trimspace(var.sa_email) : null", content)
+        self.assertIn("folder_id       = local.effective_folder_id", content)
+        self.assertIn("org_id          = local.effective_org_id", content)
+        self.assertIn("for_each = local.effective_sa_email != null ? local.environments : {}", content)
+        self.assertIn("member   = \"serviceAccount:${local.effective_sa_email}\"", content)
 
 
 class TestVerifyWaitParsing(unittest.TestCase):
