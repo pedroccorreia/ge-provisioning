@@ -44,7 +44,9 @@ stateDiagram-v2
 
 **Preconditions (machine-checkable):**
 - Tools check: `terraform version` (>= 1.5.0), `gcloud --version`, `python3 --version` (>= 3.9).
-- Identity check: `gcloud auth print-access-token` returns non-empty token with valid GCP permissions.
+- Identity check: `gcloud auth application-default print-access-token` returns a valid token for a **customer Workspace domain user** who holds:
+  - GCP IAM roles: `roles/resourcemanager.projectCreator` and `roles/billing.user`.
+  - Google Workspace Admin role: **Groups Admin** (or Super Admin) in [Workspace Admin Console > Admin roles](https://admin.google.com/ac/roles) (required to create `google_cloud_identity_group`).
 
 **Do:**
 1. Check live status:
@@ -79,7 +81,7 @@ stateDiagram-v2
 
 **Checklist:**
 - [ ] Required tools verified in PATH
-- [ ] Active GCP account authenticated with correct permissions
+- [ ] Active GCP account authenticated with Workspace **Groups Admin** rights
 - [ ] `terraform.tfvars` populated with non-placeholder values
 - [ ] Initial `terraform init` and `terraform validate` pass
 
@@ -131,13 +133,15 @@ stateDiagram-v2
 - Foundation projects and Discovery Engine service agents exist.
 
 **Do:**
-1. Retrieve the Workspace authorization parameters:
+1. Retrieve the authorization parameters (including the **21-digit numeric `client_id`**):
    ```bash
    make dwd-checklist
    ```
+   > **Where does the 21-digit numeric Client ID come from?**
+   > `service-<PROJECT_NUMBER>@gcp-sa-discoveryengine.iam.gserviceaccount.com` is a Google-managed Service Agent and does not appear in the standard Cloud Console *Service Accounts* list. `make dwd-checklist` automatically resolves its 21-digit numeric OAuth2 `uniqueId` via the Service Usage API (`POST https://serviceusage.googleapis.com/v1beta1/projects/<PROJECT_NUMBER>/services/discoveryengine.googleapis.com:generateServiceIdentity`).
 2. Open the [Google Workspace Admin Console - Domain-Wide Delegation](https://admin.google.com/ac/owl/domainwidedelegation).
 3. Click **Add new** API client for each environment project:
-   - **Client ID**: The environment service agent email (`service-<PROJECT_NUMBER>@gcp-sa-discoveryengine.iam.gserviceaccount.com`).
+   - **Client ID**: The 21-digit numeric `client_id` (`uniqueId`) or `service_agent_email` from `make dwd-checklist`.
    - **OAuth Scopes**: Copy and paste the comma-separated scope string from `dwd-checklist`:
      ```
      https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/chat.spaces.readonly,https://www.googleapis.com/auth/chat.messages.readonly,https://www.googleapis.com/auth/chat.memberships.readonly
@@ -161,12 +165,12 @@ stateDiagram-v2
 - `make status` returns exit code 0 (`phase: 3, phase_name: "connectors_and_engines_apply"`).
 
 **If it fails:**
-- DWD authorization rejected by Admin Console: Verify executing human is a Workspace Super Admin.
+- DWD authorization rejected by Admin Console: Verify executing human is a Workspace Super Admin and use the 21-digit numeric `client_id` from `make dwd-checklist`.
 - Incomplete scopes: Ensure all 9 required scopes are pasted without trailing spaces.
 - Jira OAuth/Token rejection: Verify Atlassian 3LO app redirect URI and scopes match `make jira-checklist`, and credentials in `TF_VAR_jira_auth` have access to the target Jira Cloud instance.
 
 **Checklist:**
-- [ ] Retrieved service agent emails and scope CSV via `make dwd-checklist`
+- [ ] Retrieved 21-digit numeric `client_id`, service agent email, and scope CSV via `make dwd-checklist`
 - [ ] Authorized DWD client for each environment in Google Workspace Admin Console
 - [ ] Allowed GCP projects under Google Cloud Core Services
 - [ ] Configured Jira OAuth app / API token via `make jira-checklist` (if Jira enabled)
@@ -202,6 +206,8 @@ stateDiagram-v2
 - Connector creation fails with `PERMISSION_DENIED` or `unauthorized_client`: Domain-Wide Delegation OAuth tokens can take up to 5–15 minutes to propagate. Wait 5 minutes and retry `make apply-connectors`.
 - Jira connector fails with authentication/network error: Verify Jira instance URI is reachable, allowlist static IPs if enabled, and verify `TF_VAR_jira_auth`.
 - If permission failure persists after 15 minutes: Escalate with the **dwd** or **jira** template to re-verify Client ID and scope entries.
+- `google_discovery_engine_assistant.default` fails with `409 Already Exists`: Provisioning a search engine with `SEARCH_ADD_ON_LLM` automatically creates `default_assistant`. Import it into state (`terraform import 'google_discovery_engine_assistant.default["<env>"]' projects/<PROJECT_ID>/locations/global/collections/default_collection/engines/<ENGINE_ID>/assistants/default_assistant`) and re-run `make plan-connectors && make apply-connectors`.
+- If permission failure persists after 15 minutes: Escalate with the **dwd** template to re-verify Client ID and scope entries.
 
 **Checklist:**
 - [ ] `make plan-connectors` generated `.plans/connectors.tfplan` with 0 deletes/replaces
@@ -218,34 +224,38 @@ stateDiagram-v2
 **Owner:** Agent (Human gate only if subscription IDs are missing)
 
 **Preconditions (machine-checkable):**
-- `license_config_id` and `subscription_id` in `terraform.tfvars` are populated with active billing subscription IDs.
+- `license_config_id` and `subscription_id` in `terraform.tfvars` are populated with active billing subscription IDs. (If only the subscription name is visible in Cloud Console, run `python3 scripts/allocate_licenses.py --discover` to look up both UUIDs from the Billing Account.)
 - `make status` returns exit code 0 (`phase: 4, phase_name: "license_distribution"`).
 
 **Do:**
-1. Perform preflight checks and dry-run distribution:
+1. *(Optional)* Auto-discover active subscription and `license_config_id` from the Billing Account:
+   ```bash
+   python3 scripts/allocate_licenses.py --discover
+   ```
+2. Perform preflight checks and dry-run distribution:
    ```bash
    make licenses-dryrun
    ```
-2. Execute seat distribution from Cloud Billing Account pool to environment projects:
+3. Execute seat distribution from Cloud Billing Account pool to environment projects:
    ```bash
    make licenses
    ```
-3. List active project license configurations:
+4. List active project license configurations:
    ```bash
    make licenses-list
    ```
-4. **Close the declarative loop:** Emit the distributed license configuration names and add them to `terraform.tfvars`:
+5. **Close the declarative loop:** Emit the distributed license configuration names and add them to `terraform.tfvars`:
    ```bash
    python3 scripts/allocate_licenses.py --emit-tfvars
    ```
-   Add the generated `license_config_names = { ... }` block to `terraform.tfvars` and run `terraform apply` to ensure `google_discovery_engine_user_store.default_license_config` is drift-free and managed by Terraform.
+   Add the generated `license_config_names = { ... }` block to `terraform.tfvars` and run `make plan-connectors && make apply-connectors` to ensure `google_discovery_engine_user_store.default_license_config` is drift-free and managed by Terraform.
 
 **Done when:**
 - `make licenses-list` shows `ACTIVE` state with the expected seat allocations for each environment.
 - `make status` returns exit code 0 (`phase: 5, phase_name: "verification"`).
 
 **If it fails:**
-- Missing subscription IDs: `make status` exits with code 2. Escalate with the **subscription** template for the human to provide billing subscription IDs.
+- Missing subscription IDs: Run `python3 scripts/allocate_licenses.py --discover`. If no active subscription exists on the Billing Account, `make status` exits with code 2; escalate with the **subscription** template.
 - Project number mismatch: Preflight assertions fail loudly. Verify that `config/license_allocations.json` project numbers match Cloud Resource Manager metadata.
 - Insufficient pool capacity: Billing account pool lacks free seats. Increase capacity in Google Cloud Console or reduce `seat_allocations`.
 
@@ -271,6 +281,7 @@ stateDiagram-v2
 2. Review the printed summary table and Vertex AI Search console URLs.
 3. Conduct User Acceptance Testing (Human):
    - Add pilot users to the provisioned Cloud Identity User Group (`<customer_id>-<env>-users@<domain>`).
+   - Allow **1–3 minutes** for Cloud Identity group membership and User Store license auto-assignment to propagate.
    - Open the Vertex AI Search application console in an Incognito browser window.
    - Verify search queries across Gmail, Calendar, Drive, and Chat.
    - Verify Gemini Enterprise Assistant answers and web grounding.
@@ -281,7 +292,7 @@ stateDiagram-v2
 
 **If it fails:**
 - Connectors stuck in `INITIALIZING`: Allow up to 15–30 minutes for initial Workspace connector federation handshakes.
-- User login denied: Verify user is a member of the Cloud Identity user group and user store auto-registration is `true`.
+- User login denied or license not yet assigned: Wait 1–3 minutes for group membership propagation, and verify user store auto-registration is `true`.
 
 **Checklist:**
 - [ ] `make verify` passes with all components `ACTIVE`

@@ -217,8 +217,8 @@ resource "google_discovery_engine_user_store" "default" {
   location                           = var.location
   user_store_id                      = "default_user_store"
   default_license_config             = lookup(var.license_config_names, each.key, null)
-  enable_license_auto_register       = true
-  enable_expired_license_auto_update = true
+  enable_license_auto_register       = lookup(var.license_config_names, each.key, null) != null
+  enable_expired_license_auto_update = lookup(var.license_config_names, each.key, null) != null
 
   depends_on = [
     google_project_service.services,

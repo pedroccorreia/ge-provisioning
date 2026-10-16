@@ -30,7 +30,7 @@ apply-foundation:
 	terraform apply -input=false .plans/foundation.tfplan
 
 dwd-checklist:
-	@terraform output -json dwd_checklist | python3 -m json.tool
+	@python3 scripts/status.py --dwd-checklist
 
 jira-checklist:
 	@terraform output -json jira_checklist | python3 -m json.tool

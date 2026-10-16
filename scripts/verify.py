@@ -40,19 +40,20 @@ def parse_duration(duration_str):
 
 
 def get_access_token():
-    """Retrieve access token using gcloud auth."""
-    try:
-        token = subprocess.check_output(
-            ["gcloud", "auth", "print-access-token"],
-            text=True
-        ).strip()
-        if not token:
-            raise ValueError("Empty token returned by gcloud auth")
-        return token
-    except Exception as e:
-        print(f"Error obtaining GCP access token: {e}", file=sys.stderr)
-        print("Please authenticate with 'gcloud auth application-default login' or 'gcloud auth login'", file=sys.stderr)
-        sys.exit(1)
+    """Retrieve access token using gcloud auth (preferring Application Default Credentials)."""
+    for cmd in (
+        ["gcloud", "auth", "application-default", "print-access-token"],
+        ["gcloud", "auth", "print-access-token"],
+    ):
+        try:
+            token = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+            if token:
+                return token
+        except Exception:
+            continue
+    print("Error obtaining GCP access token.", file=sys.stderr)
+    print("Please authenticate with 'gcloud auth application-default login' or 'gcloud auth login'", file=sys.stderr)
+    sys.exit(1)
 
 
 def make_request(url, method="GET", body=None, token=None, project_id=None):
@@ -79,8 +80,8 @@ def make_request(url, method="GET", body=None, token=None, project_id=None):
 
 
 def check_data_connectors(project_id, location, token):
-    """Check status of federated and third-party data connectors."""
-    url = f"https://discoveryengine.googleapis.com/v1beta/projects/{project_id}/locations/{location}/collections"
+    """Check status of federated data connectors."""
+    url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{project_id}/locations/{location}/collections"
     cols = make_request(url, token=token, project_id=project_id)
     if "_error" in cols:
         return [("Collections", "ERROR", f"HTTP {cols['_error']}: {cols['_message']}")]
@@ -95,7 +96,7 @@ def check_data_connectors(project_id, location, token):
     for col in collections:
         col_name = col.get("name", "")
         col_id = col_name.split("/")[-1]
-        c_url = f"https://discoveryengine.googleapis.com/v1beta/{col_name}/dataConnector"
+        c_url = f"https://discoveryengine.googleapis.com/v1alpha/{col_name}/dataConnector"
         c_res = make_request(c_url, token=token, project_id=project_id)
         if "_error" in c_res:
             continue
@@ -344,7 +345,14 @@ def main():
             break
 
         if not args.json:
-            print(f"  [WAIT] Components not fully ready yet. Waiting {poll_interval}s ({int(elapsed)}s / {max_wait_seconds}s elapsed)...")
+            pending = [
+                f"{r['project_id']}:{c['component']}={c['status']}"
+                for r in json_results
+                for c in r["checks"]
+                if c["status"] in ("ERROR", "FAIL")
+            ]
+            pending_str = f" ({', '.join(pending)})" if pending else ""
+            print(f"  [WAIT] Components not ready{pending_str}. Waiting {poll_interval}s ({int(elapsed)}s / {max_wait_seconds}s elapsed)...")
         time.sleep(poll_interval)
 
     # If wait mode was active and not json, print final report

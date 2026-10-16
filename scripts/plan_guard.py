@@ -63,8 +63,13 @@ def inspect_plan(plan_data):
 
     for rc in resource_changes:
         address = rc.get("address", "unknown")
+        res_type = rc.get("type", "unknown")
         change = rc.get("change", {})
         actions = change.get("actions", [])
+
+        if res_type == "local_file" and "delete" in actions and "create" in actions:
+            stats["update"] += 1
+            continue
 
         if "delete" in actions:
             if "create" in actions:
@@ -75,7 +80,7 @@ def inspect_plan(plan_data):
                 action_desc = "delete"
             destructive.append({
                 "address": address,
-                "type": rc.get("type", "unknown"),
+                "type": res_type,
                 "actions": actions,
                 "action_desc": action_desc
             })
