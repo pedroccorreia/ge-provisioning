@@ -90,17 +90,29 @@ flowchart TD
 1. **Google Cloud Platform**:
    - Active GCP Cloud Billing Account (e.g. `0X1XXX-XXXXXX-XXXXXX`).
    - Folder or Organization where customer projects will be provisioned.
+   - Bootstrap / quota project (`billing_project`) with management APIs enabled:
+     ```bash
+     gcloud services enable \
+       cloudbilling.googleapis.com \
+       cloudresourcemanager.googleapis.com \
+       cloudidentity.googleapis.com \
+       discoveryengine.googleapis.com \
+       iam.googleapis.com \
+       compute.googleapis.com \
+       --project=<BILLING_PROJECT_ID>
+     ```
    - Terraform `v1.5+`, `gcloud`, and `python3 (>= 3.9)` installed.
-   - Local authentication:
+   - Local authentication with a **customer Workspace domain identity**:
      ```bash
      gcloud auth application-default login
      gcloud auth login
      ```
-2. **Google Workspace**:
+2. **Google Workspace (Critical)**:
    - Workspace Customer ID (e.g. `C01234567`) and primary domain (`example.com`).
-   - Workspace Super Administrator access to authorize Domain-Wide Delegation at [admin.google.com](https://admin.google.com/ac/owl/domainwidedelegation).
+   - **Groups Admin Role on the `gcloud` User**: The identity authenticated in `gcloud auth application-default login` **must** hold the **Groups Admin** (or Super Admin) role in [Google Workspace Admin Console > Account > Admin roles](https://admin.google.com/ac/roles) so Terraform can provision `google_cloud_identity_group` resources.
+   - **Workspace Super Administrator** access to authorize Domain-Wide Delegation at [admin.google.com/ac/owl/domainwidedelegation](https://admin.google.com/ac/owl/domainwidedelegation) using the 21-digit numeric **Client ID (`uniqueId`)** of the Discovery Engine Service Agent (`make dwd-checklist`).
 3. **Gemini Enterprise Subscription**:
-   - Active Gemini Enterprise subscription with allocated seat capacity on the Billing Account.
+   - Active Gemini Enterprise subscription with allocated seat capacity on the Billing Account (discoverable via `python3 scripts/allocate_licenses.py --discover --billing-account <BILLING_ACCOUNT_ID>`).
 
 ---
 

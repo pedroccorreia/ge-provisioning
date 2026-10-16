@@ -29,7 +29,7 @@ apply-foundation:
 	terraform apply -input=false .plans/foundation.tfplan
 
 dwd-checklist:
-	@terraform output -json dwd_checklist | python3 -m json.tool
+	@python3 scripts/status.py --dwd-checklist
 
 plan-connectors:
 	@mkdir -p .plans

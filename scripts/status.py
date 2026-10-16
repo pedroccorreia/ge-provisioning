@@ -79,7 +79,7 @@ def parse_tfvars(tfvars_path):
     for k, raw_map in map_matches:
         inner = {}
         # parse key = "value" or key = number
-        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*"?([a-zA-Z0-9_.-]+)"?', raw_map):
+        for mk, mv in re.findall(r'"?([a-zA-Z0-9_-]+)"?\s*=\s*"?([a-zA-Z0-9_./:-]+)"?', raw_map):
             inner[mk] = int(mv) if mv.isdigit() else mv
         data[k] = inner
 
@@ -380,9 +380,56 @@ def print_human_table(status_data):
     print("================================================================================\n")
 
 
+def print_dwd_checklist():
+    """Fetch terraform dwd_checklist output and enrich with the 21-digit numeric OAuth2 Client ID (uniqueId)."""
+    import urllib.request
+    raw = subprocess.check_output(["terraform", "output", "-json", "dwd_checklist"], text=True)
+    data = json.loads(raw)
+    tfvars = parse_tfvars(os.path.join(os.getcwd(), "terraform.tfvars")) or {}
+    quota_proj = tfvars.get("billing_project")
+
+    tok = ""
+    for cmd in (
+        ["gcloud", "auth", "application-default", "print-access-token"],
+        ["gcloud", "auth", "print-access-token"],
+    ):
+        try:
+            tok = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+            if tok:
+                break
+        except Exception:
+            continue
+
+    for _env, info in data.items():
+        pnum = info.get("project_number")
+        pid = info.get("project_id")
+        if tok and pnum:
+            try:
+                url = f"https://serviceusage.googleapis.com/v1beta1/projects/{pnum}/services/discoveryengine.googleapis.com:generateServiceIdentity"
+                req = urllib.request.Request(
+                    url,
+                    data=b"{}",
+                    method="POST",
+                    headers={
+                        "Authorization": f"Bearer {tok}",
+                        "x-goog-user-project": quota_proj or pid or pnum,
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp = json.loads(urllib.request.urlopen(req).read().decode())
+                uid = resp.get("response", {}).get("uniqueId")
+                if uid:
+                    info["client_id"] = uid
+            except Exception:
+                pass
+
+    print(json.dumps(data, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check deployment status and determine next automated/human step.")
     parser.add_argument("--json", action="store_true", help="Output status in JSON format for agent consumption.")
+    parser.add_argument("--dwd-checklist", action="store_true", help="Print DWD checklist enriched with 21-digit numeric Client ID.")
     parser.add_argument("--deep", action="store_true", help="Perform deep drift check via terraform plan.")
     parser.add_argument("--workdir", default=".", help="Root directory of the Terraform repository.")
     parser.add_argument("--state-file", help="Path to terraform.tfstate override (for test fixtures).")
@@ -390,6 +437,10 @@ def main():
     parser.add_argument("--skip-auth-check", action="store_true", help="Skip active cloud credential validation (for testing).")
 
     args = parser.parse_args()
+
+    if args.dwd_checklist:
+        print_dwd_checklist()
+        sys.exit(0)
 
     status_data = determine_status(
         workdir=os.path.abspath(args.workdir),

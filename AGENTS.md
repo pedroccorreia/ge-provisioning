@@ -39,20 +39,20 @@ Execute `make status --json`. Act on `next_action`. Reference the matching stage
 ### `dwd`
 ```text
 ACTION REQUIRED (Workspace Super Admin): Authorize Domain-Wide Delegation in https://admin.google.com/ac/owl/domainwidedelegation.
-Add API Client using service agent emails from `make dwd-checklist` and OAuth scopes CSV.
+Add API Client using the 21-digit numeric Client ID (uniqueId) and service agent email from `make dwd-checklist` with OAuth scopes CSV.
 Allow GCP projects in Security > API controls > Google Cloud Core Services. Set enable_connectors = true when done.
 ```
 
 ### `permissions`
 ```text
-ACTION REQUIRED (IAM Admin): The executing principal lacks required permissions.
-Grant roles/resourcemanager.projectCreator, roles/billing.user, and Groups Admin in Workspace Admin Console.
+ACTION REQUIRED (IAM & Workspace Admin): The executing principal lacks required permissions.
+Grant GCP roles (roles/resourcemanager.projectCreator, roles/billing.user) AND Workspace Groups Admin in https://admin.google.com/ac/roles.
 ```
 
 ### `subscription`
 ```text
 ACTION REQUIRED (Billing Admin): Gemini Enterprise subscription IDs are missing.
-Purchase subscription on Billing Account and set license_config_id and subscription_id in terraform.tfvars.
+Purchase subscription on Billing Account (or run `python3 scripts/allocate_licenses.py --discover`) and set license_config_id and subscription_id in terraform.tfvars.
 ```
 
 ### `state_mismatch`
@@ -64,15 +64,17 @@ Do not apply. Backup or isolate current state before proceeding (see RUNBOOK.md 
 ### `identity`
 ```text
 ACTION REQUIRED: Active GCP credentials not found.
-Run `gcloud auth application-default login` and `gcloud auth login` with customer domain identity.
+Run `gcloud auth application-default login` and `gcloud auth login` with a customer domain identity that holds Workspace Groups Admin.
 ```
 
 ## Troubleshooting
 | Error Signature | Cause | Remediation |
 | :--- | :--- | :--- |
 | `plan_guard: DESTRUCTIVE CHANGES` | Resources would be deleted/replaced | Inspect diff; verify customer IDs; never bypass |
-| `google_cloud_identity_group: 403` | Missing Groups Admin permission | Post `permissions` template |
+| `google_cloud_identity_group: 403` | Missing Groups Admin permission | Post `permissions` template (requires Workspace Groups Admin) |
 | `connectors: PERMISSION_DENIED` | DWD token propagation latency | Wait 5 minutes and retry `make apply-connectors` |
+| `assistant: 409 ALREADY_EXISTS` | Engine auto-creates `default_assistant` | Import into state before `make apply-connectors` |
+| `missing license_config_id` | Console only displays Subscription ID | Run `python3 scripts/allocate_licenses.py --discover` |
 | `distributeLicenseConfig: Insufficient` | Billing pool out of seats | Increase seats on Billing Account |
 
 ## Repository Map

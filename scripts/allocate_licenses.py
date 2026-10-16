@@ -14,19 +14,20 @@ import urllib.request
 
 
 def get_access_token():
-    """Retrieve access token using gcloud auth."""
-    try:
-        token = subprocess.check_output(
-            ["gcloud", "auth", "print-access-token"],
-            text=True
-        ).strip()
-        if not token:
-            raise ValueError("Empty token returned by gcloud auth")
-        return token
-    except Exception as e:
-        print(f"Error obtaining GCP access token via gcloud: {e}", file=sys.stderr)
-        print("Please ensure you are authenticated: run 'gcloud auth application-default login' or 'gcloud auth login'", file=sys.stderr)
-        sys.exit(1)
+    """Retrieve access token using gcloud auth (preferring Application Default Credentials)."""
+    for cmd in (
+        ["gcloud", "auth", "application-default", "print-access-token"],
+        ["gcloud", "auth", "print-access-token"],
+    ):
+        try:
+            token = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+            if token:
+                return token
+        except Exception:
+            continue
+    print("Error obtaining GCP access token via gcloud.", file=sys.stderr)
+    print("Please ensure you are authenticated: run 'gcloud auth application-default login' or 'gcloud auth login'", file=sys.stderr)
+    sys.exit(1)
 
 
 def make_request(url, method="GET", body=None, token=None, project_id=None, max_retries=5, backoff_factor=1.5):
@@ -105,7 +106,7 @@ def get_license_configs(project_id, location, token):
 
 def get_billing_account_license_config(billing_account, license_config_id, token, central_project):
     """Fetch details of the Billing Account level license config."""
-    url = f"https://discoveryengine.googleapis.com/v1beta/billingAccounts/{billing_account}/billingAccountLicenseConfigs/{license_config_id}"
+    url = f"https://discoveryengine.googleapis.com/v1alpha/billingAccounts/{billing_account}/billingAccountLicenseConfigs/{license_config_id}"
     return make_request(url, token=token, project_id=central_project)
 
 
@@ -215,7 +216,7 @@ def list_allocations(central_project_id, location, token, config_data, json_outp
 
         try:
             cfgs = get_license_configs(p_id, location, token)
-            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE"), None)
+            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE" and not c.get("freeTrial")), None)
             if active_cfg:
                 cfg_name = active_cfg.get("name", "").split("/")[-1]
                 count = int(active_cfg.get("licenseCount", "0"))
@@ -279,7 +280,7 @@ def emit_tfvars(allocations, location, token):
             continue
         try:
             cfgs = get_license_configs(p_id, location, token)
-            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE"), None)
+            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE" and not c.get("freeTrial")), None)
             if active_cfg:
                 full_name = active_cfg.get("name")
                 lines.append(f'  "{env_key}" = "{full_name}"')
@@ -303,7 +304,7 @@ def emit_tfvars(allocations, location, token):
 
 def distribute_license_config(billing_account, license_config_id, project_number, seat_count, token, central_project, location="global", dry_run=False):
     """Distribute licenseConfig seats from Billing Account level to target GCP project number with retry/backoff."""
-    url = f"https://discoveryengine.googleapis.com/v1beta/billingAccounts/{billing_account}/billingAccountLicenseConfigs/{license_config_id}:distributeLicenseConfig"
+    url = f"https://discoveryengine.googleapis.com/v1alpha/billingAccounts/{billing_account}/billingAccountLicenseConfigs/{license_config_id}:distributeLicenseConfig"
     payload = {
         "projectNumber": str(project_number),
         "location": location,
@@ -381,8 +382,33 @@ def validate_required_params(billing_account, license_config_id, project_id):
         sys.exit(1)
 
 
+def discover_billing_subscriptions(billing_account, central_project, token, json_output=False):
+    """Discover all billingAccountLicenseConfigs on a Billing Account via v1alpha."""
+    url = f"https://discoveryengine.googleapis.com/v1alpha/billingAccounts/{billing_account}/billingAccountLicenseConfigs"
+    res = make_request(url, token=token, project_id=central_project)
+    cfgs = res.get("billingAccountLicenseConfigs", [])
+    if json_output:
+        print(json.dumps(cfgs, indent=2))
+        return cfgs
+
+    print(f"\n=======================================================")
+    print(f" Discovered Billing Account Subscriptions ({billing_account})")
+    print(f"=======================================================\n")
+    for c in cfgs:
+        lic_id = c.get("name", "").split("/")[-1]
+        sub_id = c.get("subscriptionName", "").split("/")[-1]
+        disp = c.get("subscriptionDisplayName", "N/A")
+        state = c.get("state", "UNKNOWN")
+        seats = c.get("licenseCount", "0")
+        print(f"  • Display Name      : {disp} [{state}] (Seats: {seats})")
+        print(f"    license_config_id = \"{lic_id}\"")
+        print(f"    subscription_id   = \"{sub_id}\"\n")
+    return cfgs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Distribute and configure Gemini Enterprise licenses across GCP customer environment projects.")
+    parser.add_argument("--discover", action="store_true", help="Discover subscription_id and license_config_id from the Billing Account.")
     parser.add_argument("--list", action="store_true", help="List license configs and seat quotas across all customer environment projects.")
     parser.add_argument("--distribute", action="store_true", help="Distribute subscription seats from Billing Account to project numbers.")
     parser.add_argument("--configure-auto-register", action="store_true", help="Configure projects to auto-provision licenses upon user login.")
@@ -413,15 +439,19 @@ def main():
     location = args.location or config_data.get("location") or "global"
     allocations = config_data.get("allocations", [])
 
-    if not args.list and not args.distribute and not args.configure_auto_register and not args.retract and not args.emit_tfvars:
+    if not args.discover and not args.list and not args.distribute and not args.configure_auto_register and not args.retract and not args.emit_tfvars:
         parser.print_help()
-        print("\nNote: Specify at least one action: --list, --distribute, --configure-auto-register, --retract, or --emit-tfvars.")
+        print("\nNote: Specify at least one action: --discover, --list, --distribute, --configure-auto-register, --retract, or --emit-tfvars.")
         sys.exit(1)
+
+    token = get_access_token()
+
+    if args.discover:
+        discover_billing_subscriptions(billing_account, project_id, token, json_output=args.json)
+        return
 
     # Validate essential identifiers
     validate_required_params(billing_account, license_config_id, project_id)
-
-    token = get_access_token()
 
     if args.emit_tfvars:
         emit_tfvars(allocations, location, token)
@@ -463,16 +493,22 @@ def main():
             if p_num and seats > 0:
                 print(f"Project: {p_id:<22} (Project #{p_num}) - Allocating {seats} seat(s)")
                 try:
-                    distribute_license_config(
-                        billing_account=billing_account,
-                        license_config_id=license_config_id,
-                        project_number=p_num,
-                        seat_count=seats,
-                        token=token,
-                        central_project=project_id,
-                        location=location,
-                        dry_run=args.dry_run
-                    )
+                    existing_cfgs = get_license_configs(p_id, location, token) if p_id else []
+                    active_cfg = next((c for c in existing_cfgs if c.get("state") == "ACTIVE" and not c.get("freeTrial")), None)
+                    if active_cfg and int(active_cfg.get("licenseCount", "0")) >= int(seats):
+                        cfg_short = active_cfg.get("name", "").split("/")[-1]
+                        print(f"  • Already distributed ({active_cfg.get('licenseCount')} seat(s) active in {cfg_short}) — skipping duplicate distribution.")
+                    else:
+                        distribute_license_config(
+                            billing_account=billing_account,
+                            license_config_id=license_config_id,
+                            project_number=p_num,
+                            seat_count=seats,
+                            token=token,
+                            central_project=project_id,
+                            location=location,
+                            dry_run=args.dry_run
+                        )
                 except Exception as e:
                     print(f"\n[FATAL] Failed distributing licenses to {p_id}: {e}", file=sys.stderr)
                     sys.exit(1)
@@ -502,7 +538,7 @@ def main():
                 print(f"  • Project: {t_proj:<22} -> Error retrieving license configs: {e}", file=sys.stderr)
                 continue
 
-            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE"), None)
+            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE" and not c.get("freeTrial")), None)
             if not active_cfg:
                 print(f"  • Project: {t_proj:<22} -> Skipping (No active distributed licenseConfig found)")
                 continue
@@ -545,12 +581,12 @@ def main():
                 print(f"  • Project: {t_proj:<22} -> Error retrieving license configs: {e}", file=sys.stderr)
                 continue
 
-            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE"), None)
+            active_cfg = next((c for c in cfgs if c.get("state") == "ACTIVE" and not c.get("freeTrial")), None)
             if active_cfg:
                 full_cfg_name = active_cfg["name"]
                 print(f"  • Retracting license from {t_proj} ({full_cfg_name.split('/')[-1]})...")
                 if not args.dry_run:
-                    retract_url = f"https://discoveryengine.googleapis.com/v1beta/billingAccounts/{billing_account}/billingAccountLicenseConfigs/{license_config_id}:retractLicenseConfig"
+                    retract_url = f"https://discoveryengine.googleapis.com/v1alpha/billingAccounts/{billing_account}/billingAccountLicenseConfigs/{license_config_id}:retractLicenseConfig"
                     try:
                         make_request(retract_url, method="POST", body={"licenseConfig": full_cfg_name, "fullRetract": True}, token=token, project_id=project_id)
                     except Exception as e:
