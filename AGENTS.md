@@ -23,6 +23,7 @@ Execute `make status --json`. Act on `next_action`. Reference the matching stage
 | :--- | :--- | :--- | :--- |
 | **Stage 0** | Missing inputs or invalid credentials | Valid `terraform.tfvars` / active ADC | `inputs` / `identity` |
 | **Stage 2** | Domain-Wide Delegation authorization | `enable_connectors = true` in tfvars | `dwd` |
+| **Stage 2** | Atlassian Jira authorization / URI missing | Valid Jira URI & credentials configured | `jira` |
 | **Stage 4** | Missing billing subscription IDs | Subscription IDs set in tfvars | `subscription` |
 
 ## Phase Detection (`make status --json`)
@@ -41,6 +42,13 @@ Execute `make status --json`. Act on `next_action`. Reference the matching stage
 ACTION REQUIRED (Workspace Super Admin): Authorize Domain-Wide Delegation in https://admin.google.com/ac/owl/domainwidedelegation.
 Add API Client using service agent emails from `make dwd-checklist` and OAuth scopes CSV.
 Allow GCP projects in Security > API controls > Google Cloud Core Services. Set enable_connectors = true when done.
+```
+
+### `jira`
+```text
+ACTION REQUIRED (Atlassian Admin): Configure Atlassian Jira authorization.
+Run `make jira-checklist` to view the OAuth 2.0 (3LO) callback URL, required scopes, and instance URI.
+Configure Atlassian Developer Console app or API token, set TF_VAR_jira_auth, and update jira_config.instance_uri in terraform.tfvars.
 ```
 
 ### `permissions`
@@ -73,6 +81,7 @@ Run `gcloud auth application-default login` and `gcloud auth login` with custome
 | `plan_guard: DESTRUCTIVE CHANGES` | Resources would be deleted/replaced | Inspect diff; verify customer IDs; never bypass |
 | `google_cloud_identity_group: 403` | Missing Groups Admin permission | Post `permissions` template |
 | `connectors: PERMISSION_DENIED` | DWD token propagation latency | Wait 5 minutes and retry `make apply-connectors` |
+| `jira: 401/403/UNAUTHORIZED` | Invalid Jira credentials or scopes | Post `jira` template; verify `TF_VAR_jira_auth` |
 | `distributeLicenseConfig: Insufficient` | Billing pool out of seats | Increase seats on Billing Account |
 
 ## Repository Map

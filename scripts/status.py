@@ -58,30 +58,42 @@ def parse_tfvars(tfvars_path):
         lines.append(line)
     clean_text = "\n".join(lines)
 
-    # Match simple key = "value" or key = value
-    str_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"', clean_text, re.MULTILINE)
+    # Match simple maps first: key = { ... }
+    map_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*\{(.*?)\}', clean_text, re.MULTILINE | re.DOTALL)
+    for k, raw_map in map_matches:
+        inner = {}
+        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"', raw_map):
+            inner[mk] = mv
+        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*([a-zA-Z0-9_.-]+)\b', raw_map):
+            if mk not in inner:
+                if mv.lower() == "true":
+                    inner[mk] = True
+                elif mv.lower() == "false":
+                    inner[mk] = False
+                elif mv.isdigit():
+                    inner[mk] = int(mv)
+                else:
+                    inner[mk] = mv
+        data[k] = inner
+
+    # Remove maps from text to prevent top-level regex from colliding with map keys
+    text_without_maps = re.sub(r'^\s*[a-zA-Z0-9_-]+\s*=\s*\{.*?\}', '', clean_text, flags=re.MULTILINE | re.DOTALL)
+
+    # Match simple key = "value"
+    str_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"', text_without_maps, re.MULTILINE)
     for k, v in str_matches:
         data[k] = v
 
     # Match booleans
-    bool_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*(true|false)\b', clean_text, re.MULTILINE)
+    bool_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*(true|false)\b', text_without_maps, re.MULTILINE)
     for k, v in bool_matches:
         data[k] = (v.lower() == "true")
 
     # Match simple lists of strings: key = ["a", "b"]
-    list_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*\[(.*?)\]', clean_text, re.MULTILINE | re.DOTALL)
+    list_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*\[(.*?)\]', text_without_maps, re.MULTILINE | re.DOTALL)
     for k, raw_items in list_matches:
         items = re.findall(r'"([^"]*)"', raw_items)
         data[k] = items
-
-    # Match simple maps: key = { a = 1, b = 2 }
-    map_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*\{(.*?)\}', clean_text, re.MULTILINE | re.DOTALL)
-    for k, raw_map in map_matches:
-        inner = {}
-        # parse key = "value" or key = number
-        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*"?([a-zA-Z0-9_.-]+)"?', raw_map):
-            inner[mk] = int(mv) if mv.isdigit() else mv
-        data[k] = inner
 
     return data
 
@@ -273,9 +285,12 @@ def determine_status(workdir, state_path=None, tfvars_path=None, skip_auth_check
             "exit_code": 0
         }
 
-    # 6. Stage 2 DWD Human Gate check
+    # 6. Stage 2 DWD / Jira Human Gate check
     enable_connectors = tfvars.get("enable_connectors", False)
-    if not enable_connectors:
+    enable_jira_connector = tfvars.get("enable_jira_connector", False)
+
+    # If neither connector is enabled, block on Workspace DWD (default flow)
+    if not enable_connectors and not enable_jira_connector:
         return {
             "phase": 2,
             "phase_name": PHASES[2],
@@ -286,15 +301,49 @@ def determine_status(workdir, state_path=None, tfvars_path=None, skip_auth_check
             "exit_code": 2
         }
 
+    # Jira connector onboarding validation if enabled
+    if enable_jira_connector:
+        jira_cfg = tfvars.get("jira_config", {})
+        instance_uri = str(jira_cfg.get("instance_uri", "")).strip()
+        if not instance_uri or "example.atlassian.net" in instance_uri:
+            return {
+                "phase": 2,
+                "phase_name": "jira_authorization",
+                "owner": "human",
+                "blockers": ["Atlassian Jira instance URI not configured or placeholder in terraform.tfvars"],
+                "next_action": "make jira-checklist",
+                "handoff_template": "jira",
+                "exit_code": 2
+            }
+
     # 7. Stage 3 Connectors & Engines check
     search_engines_output = state_outputs.get("search_engine_names", {}).get("value", {})
     assistants_output = state_outputs.get("assistant_names", {}).get("value", {})
+
+    # Check Jira connector existence in state if enabled
+    jira_connectors_present = True
+    if enable_jira_connector:
+        connector_keys = set()
+        if state and "_error" not in state:
+            for res in state.get("resources", []):
+                if res.get("type") == "google_discovery_engine_data_connector":
+                    for inst in res.get("instances", []):
+                        if inst.get("index_key"):
+                            connector_keys.add(inst.get("index_key"))
+            data_connectors_output = state_outputs.get("data_connector_names", {}).get("value", {})
+            if isinstance(data_connectors_output, dict):
+                connector_keys.update(data_connectors_output.keys())
+        for env in environments:
+            if f"{env}-jira" not in connector_keys:
+                jira_connectors_present = False
+                break
 
     stage3_complete = (
         bool(search_engines_output) and
         all(env in search_engines_output for env in environments) and
         bool(assistants_output) and
-        all(env in assistants_output for env in environments)
+        all(env in assistants_output for env in environments) and
+        jira_connectors_present
     )
 
     if not stage3_complete:
