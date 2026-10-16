@@ -1,27 +1,26 @@
-# Gemini Enterprise License Allocation & Troubleshooting Guide
+# Gemini Enterprise License Allocation & Operational Guide
 
-This document captures the complete findings, architectural design, Google API requirements, and actionable next steps for managing Gemini Enterprise licenses across customer environment GCP projects (e.g. `prod` and `non-prod`).
+This document captures architectural design, Google API requirements, and operational procedures for managing Gemini Enterprise seat licenses across customer environment GCP projects (e.g. `prod` and `non-prod`).
 
 ---
 
 ## 1. Executive Summary & Configuration
 
 ### Subscription Overview
-* **Subscription Name**: `customer_main_reservation`
-* **Subscription ID**: `05eab18d-9cd5-4ba6-966f-ff796c7d27a8`
-* **Billing Account License Config ID**: `ca1a2f23-797f-4cf7-ab6f-74fd5f3ca651`
-* **Billing Account ID**: `0111AA-12FED7-0F6152`
+* **Subscription Name**: Primary Gemini Enterprise Subscription
+* **Subscription ID**: `<SUBSCRIPTION_ID>`
+* **Billing Account License Config ID**: `<LICENSE_CONFIG_ID>`
+* **Billing Account ID**: `0X1XXX-XXXXXX-XXXXXX`
 * **Subscription Tier**: `Gemini Enterprise Standard`
-* **Total Subscription Capacity**: 5 seats
-* **Target Quota Distribution**: Allocated across customer environments (e.g., 4 seats for `prod`, 1 seat for `non-prod`)
+* **Target Quota Distribution**: Configured per customer environment in `seat_allocations` variable and emitted to `config/license_allocations.json`.
 
 ### Customer Environment Quota Allocations
-Configured in [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/affiliate-provisioning/config/license_allocations.json):
+Generated automatically by Terraform in [`config/license_allocations.json`](config/license_allocations.json):
 
-| Environment | Project ID | Project Number | Allocated Quota | Status |
+| Environment | Project ID | Project Number | Target Quota | Status |
 | :--- | :--- | :---: | :---: | :---: |
-| **Production** | `rwg-prod` | `1067043213672` | 4 seats | Active |
-| **Non-Production** | `rwg-non-prod` | `193224435442` | 1 seat | Active |
+| **Production** | `<customer_id>-prod` | `<PROJECT_NUMBER_PROD>` | e.g. 4 seats | Active |
+| **Non-Production** | `<customer_id>-non-prod` | `<PROJECT_NUMBER_NON_PROD>` | e.g. 1 seat | Active |
 
 ---
 
@@ -29,18 +28,18 @@ Configured in [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/
 
 ```mermaid
 flowchart TD
-    subgraph BillingLevel["Cloud Billing Account (0111AA-12FED7-0F6152)"]
-        Sub["Gemini Enterprise Subscription (5 Seats)<br/><code>ca1a2f23-797f-4cf7-ab6f-74fd5f3ca651</code>"]
+    subgraph BillingLevel["Cloud Billing Account (0X1XXX-XXXXXX-XXXXXX)"]
+        Sub["Gemini Enterprise Subscription Pool<br/><code>BillingAccountLicenseConfig</code>"]
     end
 
     subgraph Distribution["distributeLicenseConfig (scripts/allocate_licenses.py --distribute)"]
-        D1["Distribute 4 seats"]
-        D2["Distribute 1 seat"]
+        D1["Distribute N seats to Prod"]
+        D2["Distribute M seats to Non-Prod"]
     end
 
     subgraph Projects["Customer Environment Projects (User Store Auto-Register: ON)"]
-        P1["Production (rwg-prod)"]
-        P2["Non-Production (rwg-non-prod)"]
+        P1["Production (<customer_id>-prod)"]
+        P2["Non-Production (<customer_id>-non-prod)"]
     end
 
     Sub --> D1 --> P1
@@ -52,9 +51,9 @@ flowchart TD
 ## 3. Operational CLI Commands
 
 ### 1. Distribute Subscription Seats from Billing Account to Projects
-Distributes seat quota from the central Billing Account pool to target affiliate project numbers:
+Distributes seat quota from the central Billing Account pool to target customer project numbers:
 ```bash
-# Dry run preview
+# Dry run preview (performs preflight assertions without mutating state)
 python3 scripts/allocate_licenses.py --distribute --dry-run
 
 # Execute distribution
@@ -62,7 +61,7 @@ python3 scripts/allocate_licenses.py --distribute
 ```
 
 ### 2. Configure Auto-Registration on Target Projects
-Binds each project's `default_user_store` to its distributed license config so users automatically receive seats upon login:
+Configures each project's `default_user_store` to bind to its distributed license config so users automatically receive seats upon login:
 ```bash
 # Dry run preview
 python3 scripts/allocate_licenses.py --configure-auto-register --dry-run
@@ -79,28 +78,25 @@ python3 scripts/allocate_licenses.py --list
 
 ### 4. Verify End-User Search Access
 Log in to the customer search application using an Incognito window:
-* **Production Console**: [Vertex AI Search - Production App](https://console.cloud.google.com/gen-app-builder/engines?project=rwg-prod)
+* **Production Console**: `https://console.cloud.google.com/gen-app-builder/engines?project=<customer_id>-prod`
 
 ---
 
 ## 4. Minimal IAM Permission Requirements
 
 To execute seat distribution from the Cloud Billing Account, the executing principal requires:
-* `discoveryengine.billingAccountLicenseConfigs.distribute` on Billing Account `0111AA-12FED7-0F6152`.
+* `discoveryengine.billingAccountLicenseConfigs.distribute` on the Cloud Billing Account.
+* `roles/discoveryengine.admin` on the environment projects.
+* `roles/resourcemanager.projectViewer` on the environment projects (to run preflight validation).
 
 ---
 
-## Appendix: Archived Legacy Findings & Deprecations
+## 5. Billing Account Licensing Architecture
 
-> [!NOTE]
-> The following findings document the evolution from legacy project-level licensing to the current Billing Account model:
-
-1. **Project-Level Creation Deprecated**:
-   * Google Cloud returned: `"License Config creation has been deprecated at the project level for Gemini Enterprise."`
-   * Direct creation via `projects.locations.licenseConfigs.create` is no longer supported.
-2. **Central Subscription Architecture**:
-   * Subscriptions are created at the Billing Account level and provisioned to project numbers via `billingAccounts.billingAccountLicenseConfigs.distributeLicenseConfig`.
+1. **Central Subscription Model**:
+   * Gemini Enterprise subscriptions are purchased at the Cloud Billing Account level and provisioned to project numbers via `billingAccounts.billingAccountLicenseConfigs.distributeLicenseConfig`.
    * Unused quota can be released back to the central pool using `billingAccounts.billingAccountLicenseConfigs.retractLicenseConfig`.
-3. **Multi-Project Account Access**:
-   * A single user principal (e.g. `pcorreia@pcorreia.altostrat.com`) can access multiple affiliate projects independently.
-
+2. **Project License Configs**:
+   * Once distributed, a project-level `licenseConfigs/<id>` resource becomes active in the target project.
+3. **User Store Auto-Registration**:
+   * The project's `default_user_store` resource is configured with `default_license_config` and `enable_license_auto_register = true`, ensuring users are granted seats on their first application login without manual seat assignment.

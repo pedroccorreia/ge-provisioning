@@ -18,6 +18,10 @@ terraform.rc
 *credentials*.json
 token*.json
 
+# Generated Runtime Configurations
+config/license_allocations.json
+!config/license_allocations.example.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -28,6 +32,7 @@ env/
 
 # Scratch / Local Artifacts
 discovery_v1beta.json
+*.log
 
 # OS & Editor
 .DS_Store

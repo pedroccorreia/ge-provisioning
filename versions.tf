@@ -1,21 +1,17 @@
 terraform {
-  required_version = ">= 1.0.0"
+  required_version = ">= 1.5.0"
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 5.0.0"
+      version = "~> 7.41"
     }
-    googleworkspace = {
-      source  = "hashicorp/googleworkspace"
-      version = ">= 0.7.0"
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 7.41"
     }
-    external = {
-      source  = "hashicorp/external"
+    local = {
+      source  = "hashicorp/local"
       version = ">= 2.0.0"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = ">= 3.0.0"
     }
   }
 }

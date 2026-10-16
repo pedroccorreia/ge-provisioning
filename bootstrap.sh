@@ -1,52 +1,58 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Load configurations
-BOOTSTRAP_PROJECT="${BOOTSTRAP_PROJECT:-affiliates-bootstrap}"
+# Prompt or load configuration for bootstrap project
+if [ -z "${BOOTSTRAP_PROJECT:-}" ]; then
+  read -r -p "Enter GCP Bootstrap Project ID: " BOOTSTRAP_PROJECT
+fi
+
 SA_NAME="gemini-provisioner"
 SA_EMAIL="${SA_NAME}@${BOOTSTRAP_PROJECT}.iam.gserviceaccount.com"
 
-echo "=== Stage 1: Creating GCP Service Account ==="
+echo "=== Stage 1: Creating Provisioner Service Account in ${BOOTSTRAP_PROJECT} ==="
 if ! gcloud iam service-accounts describe "${SA_EMAIL}" --project "${BOOTSTRAP_PROJECT}" &>/dev/null; then
   gcloud iam service-accounts create "${SA_NAME}" \
     --display-name="Gemini IaC Provisioner" \
     --project "${BOOTSTRAP_PROJECT}"
-  echo "Service account created."
+  echo "Service account created: ${SA_EMAIL}"
 else
-  echo "Service account already exists."
+  echo "Service account already exists: ${SA_EMAIL}"
 fi
 
-echo "=== Stage 2: Granting IAM Roles to User ==="
-ACTIVE_USER=$(gcloud config get-value account)
-gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
-  --member="user:${ACTIVE_USER}" \
-  --role="roles/iam.serviceAccountTokenCreator" \
-  --project "${BOOTSTRAP_PROJECT}" --quiet
-
-echo "=== Stage 3: Fetching Unique Client ID for Domain-Wide Delegation ==="
-CLIENT_ID=$(gcloud iam service-accounts describe "${SA_EMAIL}" \
-  --project "${BOOTSTRAP_PROJECT}" \
-  --format="value(uniqueId)")
+echo "=== Stage 2: Granting Service Account Token Creator to Active User ==="
+ACTIVE_USER=$(gcloud config get-value account 2>/dev/null || echo "")
+if [ -n "${ACTIVE_USER}" ]; then
+  echo "Granting roles/iam.serviceAccountTokenCreator on ${SA_EMAIL} to ${ACTIVE_USER}..."
+  gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
+    --member="user:${ACTIVE_USER}" \
+    --role="roles/iam.serviceAccountTokenCreator" \
+    --project "${BOOTSTRAP_PROJECT}" --quiet
+fi
 
 echo ""
 echo "=========================================================================="
-echo "ACTION REQUIRED: Configure Google Workspace Domain-Wide Delegation"
+echo " Stage 1 Foundation: Terraform Init & Apply"
 echo "=========================================================================="
-echo "1. Open the Google Workspace Admin Console:"
-echo "   https://admin.google.com/ac/owl/domainwidedelegation"
-echo "2. Click 'Add new'."
-echo "3. Enter the Client ID:"
-echo "   ${CLIENT_ID}"
-echo "4. Under 'OAuth Scopes', copy and paste the following comma-separated list:"
-echo "   https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member"
-echo "5. Click 'Authorize'."
+echo "Initial foundation provisioning creates projects, APIs, Cloud Identity groups,"
+echo "service agent identities, and user stores (with connectors disabled)."
 echo "=========================================================================="
 echo ""
-read -p "Once you have completed the Workspace authorization steps above, press [Enter] to run Terraform..."
 
-# Copy python helpers to workspace
-cp scripts/*.py .
-
-# Initialize and Apply Terraform
 terraform init
-terraform apply -var="sa_email=${SA_EMAIL}"
+terraform apply -var="sa_email=${SA_EMAIL}" -var="billing_project=${BOOTSTRAP_PROJECT}"
+
+echo ""
+echo "=========================================================================="
+echo " NEXT STEPS: Workspace Admin Domain-Wide Delegation (DWD)"
+echo "=========================================================================="
+echo "1. Run the following command to retrieve the DWD authorization checklist:"
+echo "   terraform output dwd_checklist"
+echo "2. Authorize each environment's Discovery Engine service agent in the Admin Console:"
+echo "   https://admin.google.com/ac/owl/domainwidedelegation"
+echo "3. After authorization, deploy Workspace connectors & Gemini Enterprise apps:"
+echo "   terraform apply -var=\"enable_connectors=true\""
+echo "4. Distribute seat licenses to projects:"
+echo "   python3 scripts/allocate_licenses.py --distribute"
+echo "5. Verify the deployment:"
+echo "   python3 scripts/verify.py"
+echo "=========================================================================="

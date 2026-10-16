@@ -1,160 +1,201 @@
 # Gemini Enterprise Customer Provisioning IaC
 
-This repository contains the Terraform Infrastructure as Code (IaC) configuration to set up Gemini Enterprise integration (Vertex AI Search) with Google Workspace Gmail and Google Calendar connectors, alongside Google Workspace Groups for a single customer across configurable environments (such as `non-prod` and `prod`).
+This repository contains production-grade Terraform Infrastructure as Code (IaC) to provision and configure Gemini Enterprise (Vertex AI Search) for Google Workspace.
+
+It deploys:
+- **Dedicated GCP Projects** per configurable customer environment (e.g. `non-prod`, `prod`, `dev`, `pilot`).
+- **Discovery Engine Service Agents** pre-created with Domain-Wide Delegation (DWD) authorization metadata.
+- **Location Identity Provider (IdP)** natively configured to `GSUITE` via `google_discovery_engine_acl_config`.
+- **Cloud Identity User Groups** and IAM search engine role bindings (`roles/discoveryengine.user`).
+- **User Store with Auto-Registration** (`google_discovery_engine_user_store`).
+- **Federated Workspace Connectors** (`google_mail`, `google_calendar`, `google_drive`, `google_chat`).
+- **Unified Intranet Search App & Governed Assistant** (`google_discovery_engine_search_engine`, `google_discovery_engine_assistant`).
+- **Automated Seat Distribution & Verification** tooling.
+
+---
 
 ## Architecture Overview
 
-- **GCP Projects**: Dedicated projects per configured environment (e.g. `${customer_id}-prod` and `${customer_id}-non-prod`) containing Vertex AI Search collections, connectors, and apps.
-- **Environments**: Configurable via the `environments` variable (e.g., `["prod"]`, `["non-prod", "prod"]`).
-- **Customer Workspace Groups**: Environment-scoped groups (Admins and Users) prefixed with customer ID and environment (e.g. `rwg-prod-users` and `rwg-prod-admins`).
+```mermaid
+flowchart TD
+  subgraph Customer["Customer Google Workspace Tenant"]
+    WSGroup["Cloud Identity Group<br/><code>{customer}-{env}-users@{domain}</code>"]
+    WSAdmin["Google Workspace Admin Console<br/>(DWD API Client Authorization)"]
+  end
+
+  subgraph GCPFoundation["GCP Customer Environment Project ({customer}-{env})"]
+    PService["Enabled GCP APIs<br/>(discoveryengine, drive, gmail, chat...)"]
+    SAgent["Discovery Engine Service Agent<br/><code>service-{PROJECT_NUMBER}@gcp-sa-discoveryengine...</code>"]
+    IdP["Location ACL / IdP: GSUITE"]
+    UStore["User Store: default_user_store<br/>(Auto-Register: ON)"]
+  end
+
+  subgraph ConnectorsAndEngine["Workspace Connectors & Search Engine"]
+    Conn1["Gmail Connector"]
+    Conn2["Calendar Connector"]
+    Conn3["Drive Connector"]
+    Conn4["Chat Connector"]
+    Engine["Search App: {customer}-{env}-search-engine"]
+    Assist["Governed Assistant: default_assistant"]
+  end
+
+  WSAdmin -.->|Authorizes Scopes| SAgent
+  SAgent --> Conn1 & Conn2 & Conn3 & Conn4
+  Conn1 & Conn2 & Conn3 & Conn4 --> Engine
+  Engine --> Assist
+  WSGroup -->|roles/discoveryengine.user| Engine
+```
+
+### Why Location is Global
+The `location` variable defaults to `global`. In Gemini Enterprise federated Workspace search (Gmail, Calendar, Drive, Chat), queries are federated directly against Google Workspace APIs in real-time under user credentials and are not ingested or copied into GCP persistent data stores. Google Workspace connectors currently require the Discovery Engine resources to reside in the `global` location.
 
 ---
 
 ## Prerequisites
 
-Before running the Terraform deployment, ensure you have completed the following setup:
+1. **Google Cloud Platform**:
+   - An active GCP Cloud Billing Account (e.g. `0X1XXX-XXXXXX-XXXXXX`).
+   - A GCP folder or organization where projects will be created.
+   - Terraform `v1.5+` installed locally or in CI.
+   - Local authentication:
+     ```bash
+     gcloud auth application-default login
+     ```
 
-### 1. Google Cloud Platform (GCP)
-- A GCP project ID with billing enabled (bootstrap project).
-- Your user or service account must have permissions to enable APIs and manage Vertex AI Search (Discovery Engine) resources.
+2. **Google Workspace**:
+   - Google Workspace Customer ID (e.g. `C01234567`) and primary domain (`example.com`).
+   - Workspace Administrator access to authorize Domain-Wide Delegation at [admin.google.com](https://admin.google.com/ac/owl/domainwidedelegation).
 
-### 2. Google Workspace
-- A Google Workspace domain (e.g. `example.com`) and Customer ID (e.g. `C01234567`).
-- A Workspace administrator account.
-- **Domain-Wide Delegation**: You must set up a Service Account in the GCP Console and grant it Domain-Wide Delegation in the Google Workspace Admin console with the following OAuth scopes:
-  - `https://www.googleapis.com/auth/admin.directory.group`
-  - `https://www.googleapis.com/auth/admin.directory.group.member`
+3. **Gemini Enterprise Subscription**:
+   - Subscription purchased at the Cloud Billing Account level with available license seats.
 
 ---
 
-## Configuration Variables
+## Configuration
 
-Create a `terraform.tfvars` file to configure your deployment values:
+Copy the example variables file to create your active configuration:
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Edit `terraform.tfvars` with your customer environment settings:
 
 ```hcl
-customer_id           = "rwg"                       # Short slug/identifier for the customer
-customer_name         = "Ray White Group"           # Customer display name
-environments          = ["non-prod", "prod"]        # Configurable environments (e.g. ["prod"] or ["non-prod", "prod"])
-project_id_prefix      = ""                          # Optional prefix for project IDs
-billing_account        = "012345-6789AB-CDEF01"      # Mandatory billing account ID
-folder_id              = "12345678901"               # Optional GCP folder ID to place projects under
-org_id                 = "98765432109"               # Optional GCP organization ID (if folder_id is null)
-company_domain         = "your-workspace-domain.com"
-workspace_customer_id  = "C01234567"
-workspace_admin_email  = "admin-impersonator@your-workspace-domain.com"
-sa_email               = "gemini-provisioner@affiliates-bootstrap.iam.gserviceaccount.com"
-```
+customer_id           = "example-customer"
+customer_name         = "Example Customer"
+environments          = ["non-prod", "prod"]
+company_domain        = "example.com"
+workspace_customer_id = "C01234567"
+billing_account       = "0X1XXX-XXXXXX-XXXXXX"
+folder_id             = "123456789012"
 
-*Note: `workspace_admin_email` is the email address of a Workspace administrator that the service account will impersonate to manage the groups.*
+# Staged rollout flag (leave false for Stage 1)
+enable_connectors     = false
+workspace_connectors  = ["google_mail", "google_calendar", "google_drive", "google_chat"]
 
----
-
-## Deployment Steps
-
-### 1. Authenticate with Google Cloud
-Ensure your local terminal is authenticated with your GCP account:
-```bash
-gcloud auth application-default login
-```
-
-### 2. Set Google Workspace Credentials
-Expose the path to your service account key file (with domain-wide delegation enabled) as an environment variable so the `googleworkspace` provider can authenticate:
-```bash
-export GOOGLEWORKSPACE_CREDENTIALS="/path/to/your/service-account-key.json"
-```
-
-### 3. Initialize Terraform
-Initialize the working directory and install the required providers (`google`, `googleworkspace`, `null`):
-```bash
-terraform init
-```
-
-### 4. Plan the Deployment
-Run a dry-run to see exactly what resources will be created:
-```bash
-terraform plan
-```
-
-### 5. Apply the Changes
-Apply the configuration to provision the groups, connectors, and search engines:
-```bash
-terraform apply
-```
-
----
-
-## Post-Deployment Actions
-
-To complete the setup and make the Gemini Enterprise search active:
-1. **Workspace Project Authorization**: In the Google Workspace Admin Console, authorize the GCP Project IDs to access your Workspace data.
-2. **Add Group Members**: Add customer employees and administrators to their respective `${customer_id}-${environment}-users` and `${customer_id}-${environment}-admins` Google Groups.
-3. **Assign Licenses**: Assign Gemini Enterprise licenses using the automated allocation script (`scripts/allocate_licenses.py`).
-
----
-
-## Gemini Enterprise License Allocation & Distribution
-
-Licenses are provisioned centrally at the **Cloud Billing Account** level (`0111AA-12FED7-0F6152`) and distributed to customer environment project numbers via automated API workflows.
-
-### 1. Configure Seat Distribution
-Edit [`config/license_allocations.json`](file:///Users/pcorreia/dev/ge/affiliate-provisioning/config/license_allocations.json) to set your billing account, subscription license config ID, and quota distribution per environment:
-
-```json
-{
-  "billing_account": "0111AA-12FED7-0F6152",
-  "license_config_id": "ca1a2f23-797f-4cf7-ab6f-74fd5f3ca651",
-  "subscription_id": "05eab18d-9cd5-4ba6-966f-ff796c7d27a8",
-  "subscription_tier": "Gemini Enterprise Standard",
-  "location": "global",
-  "allocations": [
-    {
-      "project_id": "rwg-prod",
-      "project_number": "1067043213672",
-      "environment": "prod",
-      "environment_name": "Production",
-      "seat_count": 4,
-      "status": "active"
-    },
-    {
-      "project_id": "rwg-non-prod",
-      "project_number": "193224435442",
-      "environment": "non-prod",
-      "environment_name": "Non-Production",
-      "seat_count": 1,
-      "status": "active"
-    }
-  ]
+# Seat quota allocations per environment
+seat_allocations = {
+  prod     = 4
+  non-prod = 1
 }
 ```
 
-### 2. Distribute Seats to Projects
-Preview and execute the distribution of subscription quota from the Billing Account to project numbers:
+---
+
+## Staged Deployment Runbook
+
+Deploying Gemini Enterprise with federated Workspace connectors involves an unavoidable one-time Workspace Admin authorization gate. The configuration is intentionally staged into two safe apply steps:
+
+### Stage 1: Deploy Foundation Infrastructure
+
+Provisions the GCP projects, APIs, Discovery Engine service agent identity, IdP configuration, Cloud Identity user groups, user store, and single source of truth license allocations file.
 
 ```bash
-# Dry run
+terraform init
+terraform apply
+```
+
+Review the output checklist for Domain-Wide Delegation:
+
+```bash
+terraform output -json dwd_checklist
+```
+
+### Stage 2: Workspace Admin Domain-Wide Delegation (DWD)
+
+1. Open the [Google Workspace Admin Console - Domain-Wide Delegation](https://admin.google.com/ac/owl/domainwidedelegation).
+2. Click **Add new**.
+3. For each environment project from the `terraform output dwd_checklist`:
+   - **Client ID**: Copy the `service_agent_email` (format: `service-<PROJECT_NUMBER>@gcp-sa-discoveryengine.iam.gserviceaccount.com`).
+   - **OAuth Scopes**: Paste the comma-separated `oauth_scopes_csv` string:
+     ```
+     https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/chat.spaces.readonly,https://www.googleapis.com/auth/chat.messages.readonly,https://www.googleapis.com/auth/chat.memberships.readonly
+     ```
+   - Click **Authorize**.
+4. In the Google Workspace Admin Console under **Security > Access and data control > API controls > Google Cloud Core Services**, ensure each environment GCP Project is allowed access.
+
+### Stage 3: Deploy Connectors, Search Engines & Assistants
+
+Once DWD is authorized, enable connectors in `terraform.tfvars` or pass the flag:
+
+```bash
+terraform apply -var="enable_connectors=true"
+```
+
+This provisions:
+- Google Mail, Google Calendar, Google Drive, and Google Chat federated connectors.
+- The unified Discovery Engine Search Application.
+- Engine-level IAM permissions for the customer user groups.
+- The governed Gemini Enterprise Assistant with web grounding and custom instructions.
+
+### Stage 4: Distribute Subscription Licenses
+
+Distribute license seats from your Cloud Billing Account pool to target projects using the automated script:
+
+```bash
+# Preview distribution and verify project numbers & billing pool capacity
 python3 scripts/allocate_licenses.py --distribute --dry-run
 
 # Execute distribution
 python3 scripts/allocate_licenses.py --distribute
 ```
 
-### 3. Configure Auto-Registration on User Login
-Configure each target environment project's `default_user_store` to automatically bind users to its local distributed license on first login:
+### Stage 5: End-to-End Verification
+
+Run the verification script to inspect all components across environments:
 
 ```bash
-# Dry run
-python3 scripts/allocate_licenses.py --configure-auto-register --dry-run
-
-# Apply configuration
-python3 scripts/allocate_licenses.py --configure-auto-register
+python3 scripts/verify.py
 ```
 
-### 4. Verify Active Allocations
-Check the active license configs and assigned quota across customer environment projects:
+The script validates:
+- Status of all Workspace data connectors (`ACTIVE`)
+- Search engine and assistant health
+- Project-level distributed license configs and assigned seat quotas
+- User store auto-registration setting
+- Direct links to the Vertex AI Search application console
 
-```bash
-python3 scripts/allocate_licenses.py --list
+---
+
+## File Structure
+
 ```
-
-
-
+├── .github/workflows/
+│   └── terraform.yml               # CI: terraform fmt and validate
+├── config/
+│   ├── license_allocations.example.json # Example seat allocation schema
+│   └── license_allocations.json         # Generated runtime allocation (gitignored)
+├── scripts/
+│   ├── allocate_licenses.py        # License distribution & auto-registration tool
+│   └── verify.py                   # Post-deployment validation script
+├── bootstrap.sh                    # Helper script for initial SA setup
+├── main.tf                         # Core Terraform resources
+├── outputs.tf                      # Terraform outputs & DWD checklist
+├── providers.tf                    # Google & Google-Beta providers
+├── terraform.tfvars.example        # Example sanitized variable definitions
+├── variables.tf                    # Input variable declarations
+├── versions.tf                     # Provider & Terraform version constraints
+├── todo.md                         # Deployment checklist
+└── licenses.md                     # Deep-dive licensing architecture reference
+```
