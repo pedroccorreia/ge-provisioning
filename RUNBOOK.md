@@ -149,11 +149,10 @@ stateDiagram-v2
    - Click **Authorize**.
 4. In Workspace Admin Console under **Security > Access and data control > API controls > Google Cloud Core Services**, allow access for the environment GCP project IDs if prompted.
 5. If Atlassian Jira is enabled (`enable_jira_connector = true`):
-   - Run `make jira-checklist` to view the Jira instance URI, scopes, and OAuth callback URL.
-   - For OAuth 2.0 (3LO): Register app in [Atlassian Developer Console](https://developer.atlassian.com/console/myapps/) with callback `https://vertexaisearch.cloud.google.com/console/oauth/default_oauth.html` and required scopes (`read:jira-work`, `read:jira-user`, `offline_access`).
-   - For API Token: Generate token in Atlassian account security settings.
-   - Export credentials via `export TF_VAR_jira_auth='{"client_id":"...","client_secret":"..."}'` or `export TF_VAR_jira_auth='{"user_account":"...","api_token":"..."}'`.
-   - Update `jira_config.instance_uri` in `terraform.tfvars`.
+   - Run `make jira-checklist` to view the Jira instance URI, resolved `cloudId` (`instance_id`), required OAuth scopes, and redirect URLs.
+   - For OAuth 2.0 (3LO, v3): Register app in [Atlassian Developer Console](https://developer.atlassian.com/console/myapps/) with callback URLs `https://vertexaisearch.cloud.google.com/console/oauth/jira_oauth.html` (Ingestion) and `https://vertexaisearch.cloud.google.com/oauth-redirect` (Actions), configure scopes from `jira-checklist`, and export credentials via `export TF_VAR_jira_auth='{"client_id":"...","client_secret":"...","refresh_token":"...","instance_id":"..."}'`.
+   - For API Token (Basic Auth, v1): Generate API token in Atlassian account security settings and export via `export TF_VAR_jira_auth='{"user_account":"...","api_token":"..."}'`.
+   - Update `jira_config.instance_uri` (and optionally `jira_config.instance_id`) in `terraform.tfvars`.
 6. Signal completion by updating `terraform.tfvars`:
    ```hcl
    enable_connectors = true

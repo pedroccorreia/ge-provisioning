@@ -35,10 +35,11 @@ subscription_tier = "Gemini Enterprise Standard"
 
 # Atlassian Jira Connector (optional)
 enable_jira_connector = false
-jira_auth_type        = "OAUTH2"
+jira_auth_type        = "OAUTH"
 
 jira_config = {
   instance_uri                 = "https://example.atlassian.net"
+  instance_id                  = "" # Jira Cloud ID UUID (fetch via: curl -s https://<site>.atlassian.net/_edge/tenant_info | jq -r .cloudId)
   data_source                  = "jira"
   data_source_version          = 3
   sync_mode                    = "PERIODIC"
@@ -51,6 +52,6 @@ jira_config = {
 }
 
 # Note: Sensitive credentials should be passed via TF_VAR_jira_auth environment variable, e.g.:
-# export TF_VAR_jira_auth='{"client_id":"...","client_secret":"..."}'  # for OAUTH2
+# export TF_VAR_jira_auth='{"client_id":"...","client_secret":"...","refresh_token":"...","instance_id":"..."}'  # for OAUTH (v3)
 # or
-# export TF_VAR_jira_auth='{"user_account":"user@example.com","api_token":"..."}'  # for API_TOKEN
+# export TF_VAR_jira_auth='{"user_account":"user@example.com","api_token":"..."}'  # for BASIC_AUTH / API_TOKEN (v1)

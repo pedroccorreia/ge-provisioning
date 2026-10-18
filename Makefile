@@ -22,7 +22,7 @@ status:
 
 plan-foundation:
 	@mkdir -p .plans
-	terraform plan -input=false -var="enable_connectors=false" -out=.plans/foundation.tfplan
+	terraform plan -input=false -var="enable_connectors=false" -var="enable_jira_connector=false" -out=.plans/foundation.tfplan
 	python3 scripts/plan_guard.py .plans/foundation.tfplan
 
 apply-foundation:
@@ -33,7 +33,7 @@ dwd-checklist:
 	@python3 scripts/status.py --dwd-checklist
 
 jira-checklist:
-	@terraform output -json jira_checklist | python3 -m json.tool
+	@python3 scripts/status.py --jira-checklist
 
 plan-connectors:
 	@mkdir -p .plans

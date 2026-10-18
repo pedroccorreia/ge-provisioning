@@ -135,12 +135,12 @@ variable "enable_jira_connector" {
 
 variable "jira_auth_type" {
   type        = string
-  description = "Authentication method for Jira connector: 'OAUTH2' or 'API_TOKEN'"
-  default     = "OAUTH2"
+  description = "Authentication method for Jira connector: 'OAUTH' (or 'OAUTH2'), 'BASIC_AUTH' (or 'API_TOKEN'), or 'OAUTH_TWO_LEGGED'"
+  default     = "OAUTH"
 
   validation {
-    condition     = contains(["OAUTH2", "API_TOKEN"], var.jira_auth_type)
-    error_message = "jira_auth_type must be either 'OAUTH2' or 'API_TOKEN'."
+    condition     = contains(["OAUTH", "OAUTH2", "BASIC_AUTH", "API_TOKEN", "OAUTH_TWO_LEGGED"], var.jira_auth_type)
+    error_message = "jira_auth_type must be one of 'OAUTH', 'OAUTH2', 'BASIC_AUTH', 'API_TOKEN', or 'OAUTH_TWO_LEGGED'."
   }
 }
 
@@ -150,6 +150,8 @@ variable "jira_auth" {
     api_token     = optional(string, "")
     client_id     = optional(string, "")
     client_secret = optional(string, "")
+    instance_id   = optional(string, "")
+    refresh_token = optional(string, "")
   })
   description = "Sensitive authentication credentials for Jira connector (pass via TF_VAR_jira_auth environment variable)"
   default     = {}
@@ -159,8 +161,9 @@ variable "jira_auth" {
 variable "jira_config" {
   type = object({
     instance_uri                 = optional(string, "")
+    instance_id                  = optional(string, "")
     data_source                  = optional(string, "jira")
-    data_source_version          = optional(number, 3)
+    data_source_version          = optional(number, null)
     connector_modes              = optional(list(string), ["DATA_INGESTION"])
     sync_mode                    = optional(string, "PERIODIC")
     refresh_interval             = optional(string, "86400s")
@@ -169,6 +172,10 @@ variable "jira_config" {
     static_ip_enabled            = optional(bool, false)
     enable_actions               = optional(bool, false)
     enabled_actions              = optional(list(string), ["create_issue", "update_issue", "change_issue_status", "create_comment", "update_comment", "upload_attachment"])
+    project_keys_include         = optional(list(string), [])
+    project_keys_exclude         = optional(list(string), [])
+    auto_run_disabled            = optional(bool, false)
+    incremental_sync_disabled    = optional(bool, false)
     extra_params                 = optional(map(string), {})
   })
   description = "Configuration for the Atlassian Jira data connector"

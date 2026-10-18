@@ -58,18 +58,27 @@ def parse_tfvars(tfvars_path):
         lines.append(line)
     clean_text = "\n".join(lines)
 
-    # Match simple maps first: key = { ... }
+    # Match maps first: key = { ... }
     map_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*\{(.*?)\}', clean_text, re.MULTILINE | re.DOTALL)
     for k, raw_map in map_matches:
         inner = {}
-        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"', raw_map):
-            inner[mk] = mv
-        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*([a-zA-Z0-9_.-]+)\b', raw_map):
+        # Parse lists inside map: key = ["a", "b"] or key = ['a', 'b']
+        for mk, raw_items in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*\[(.*?)\]', raw_map, re.DOTALL):
+            inner[mk] = re.findall(r'["\']([^"\']*)["\']', raw_items)
+        raw_map_clean = re.sub(r'([a-zA-Z0-9_-]+)\s*=\s*\[.*?\]', '', raw_map, flags=re.DOTALL)
+        # Parse strings inside map: key = "value"
+        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"', raw_map_clean):
+            if mk not in inner:
+                inner[mk] = mv
+        # Parse booleans, numbers, or identifiers: key = true / false / 123 / null
+        for mk, mv in re.findall(r'([a-zA-Z0-9_-]+)\s*=\s*([a-zA-Z0-9_./:-]+)\b', raw_map_clean):
             if mk not in inner:
                 if mv.lower() == "true":
                     inner[mk] = True
                 elif mv.lower() == "false":
                     inner[mk] = False
+                elif mv.lower() == "null":
+                    inner[mk] = None
                 elif mv.isdigit():
                     inner[mk] = int(mv)
                 else:
@@ -94,15 +103,6 @@ def parse_tfvars(tfvars_path):
     for k, raw_items in list_matches:
         items = re.findall(r'"([^"]*)"', raw_items)
         data[k] = items
-
-    # Match simple maps: key = { a = 1, b = 2 }
-    map_matches = re.findall(r'^\s*([a-zA-Z0-9_-]+)\s*=\s*\{(.*?)\}', clean_text, re.MULTILINE | re.DOTALL)
-    for k, raw_map in map_matches:
-        inner = {}
-        # parse key = "value" or key = number
-        for mk, mv in re.findall(r'"?([a-zA-Z0-9_-]+)"?\s*=\s*"?([a-zA-Z0-9_./:-]+)"?', raw_map):
-            inner[mk] = int(mv) if mv.isdigit() else mv
-        data[k] = inner
 
     return data
 
@@ -162,24 +162,25 @@ def check_identity(skip_auth_check=False):
     return False, None
 
 
-def determine_status(workdir, state_path=None, tfvars_path=None, skip_auth_check=False, deep=False):
+def determine_status(workdir, state_path=None, tfvars_path=None, skip_auth_check=False, skip_tools_check=False, deep=False):
     """
     Core phase detection and health assessment logic.
     """
     blockers = []
 
     # 1. Tools check
-    missing_tools = check_cli_tools()
-    if missing_tools:
-        return {
-            "phase": 0,
-            "phase_name": PHASES[0],
-            "owner": "human",
-            "blockers": [f"Missing required tools in PATH: {', '.join(missing_tools)}"],
-            "next_action": f"Install required CLI tools: {', '.join(missing_tools)}",
-            "handoff_template": "tools",
-            "exit_code": 1
-        }
+    if not skip_tools_check:
+        missing_tools = check_cli_tools()
+        if missing_tools:
+            return {
+                "phase": 0,
+                "phase_name": PHASES[0],
+                "owner": "human",
+                "blockers": [f"Missing required tools in PATH: {', '.join(missing_tools)}"],
+                "next_action": f"Install required CLI tools: {', '.join(missing_tools)}",
+                "handoff_template": "tools",
+                "exit_code": 1
+            }
 
     # 2. Identity check
     has_identity, identity_info = check_identity(skip_auth_check)
@@ -484,15 +485,64 @@ def print_dwd_checklist():
     print(json.dumps(data, indent=2))
 
 
+def print_jira_checklist():
+    """Fetch terraform jira_checklist output, resolve Atlassian cloudId from tenant_info if accessible, and output JSON."""
+    import urllib.request
+    try:
+        raw = subprocess.check_output(["terraform", "output", "-json", "jira_checklist"], text=True, stderr=subprocess.DEVNULL)
+        data = json.loads(raw)
+    except Exception:
+        # Fallback to reading terraform.tfvars directly
+        tfvars = parse_tfvars(os.path.join(os.getcwd(), "terraform.tfvars")) or {}
+        jira_cfg = tfvars.get("jira_config", {})
+        envs = tfvars.get("environments", ["non-prod", "prod"])
+        uri = jira_cfg.get("instance_uri", "")
+        auth_type = tfvars.get("jira_auth_type", "OAUTH")
+        data = {
+            env: {
+                "project_id": f"{tfvars.get('project_id_prefix', '')}{tfvars.get('customer_id', 'customer')}-{env}",
+                "instance_uri": uri,
+                "auth_type": auth_type,
+                "oauth_ingestion_callback_url": "https://vertexaisearch.cloud.google.com/console/oauth/jira_oauth.html",
+                "oauth_actions_callback_url": "https://vertexaisearch.cloud.google.com/oauth-redirect",
+                "developer_console_url": "https://developer.atlassian.com/console/myapps/",
+                "admin_console_url": "https://admin.atlassian.com",
+                "instance_id_help": "Retrieve your Atlassian Cloud ID UUID via: curl -s https://<site>.atlassian.net/_edge/tenant_info | jq -r .cloudId",
+                "entities": jira_cfg.get("entities", ["project", "issue", "attachment", "comment", "worklog"])
+            }
+            for env in envs
+        }
+
+    # Attempt to resolve Atlassian cloudId if instance_uri is valid
+    for _env, info in data.items():
+        uri = info.get("instance_uri", "").rstrip("/")
+        if uri and "example.atlassian.net" not in uri and uri.startswith("http"):
+            try:
+                tenant_url = f"{uri}/_edge/tenant_info"
+                req = urllib.request.Request(tenant_url, headers={"User-Agent": "GE-Provisioning/1.0"})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    t_data = json.loads(resp.read().decode("utf-8"))
+                    cloud_id = t_data.get("cloudId")
+                    if cloud_id:
+                        info["resolved_cloud_id"] = cloud_id
+                        info["instance_id"] = cloud_id
+            except Exception:
+                pass
+
+    print(json.dumps(data, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check deployment status and determine next automated/human step.")
     parser.add_argument("--json", action="store_true", help="Output status in JSON format for agent consumption.")
     parser.add_argument("--dwd-checklist", action="store_true", help="Print DWD checklist enriched with 21-digit numeric Client ID.")
+    parser.add_argument("--jira-checklist", action="store_true", help="Print Jira checklist enriched with discovered Atlassian cloudId.")
     parser.add_argument("--deep", action="store_true", help="Perform deep drift check via terraform plan.")
     parser.add_argument("--workdir", default=".", help="Root directory of the Terraform repository.")
     parser.add_argument("--state-file", help="Path to terraform.tfstate override (for test fixtures).")
     parser.add_argument("--tfvars-file", help="Path to terraform.tfvars override (for test fixtures).")
     parser.add_argument("--skip-auth-check", action="store_true", help="Skip active cloud credential validation (for testing).")
+    parser.add_argument("--skip-tools-check", action="store_true", help="Skip CLI tools validation (for testing).")
 
     args = parser.parse_args()
 
@@ -500,11 +550,16 @@ def main():
         print_dwd_checklist()
         sys.exit(0)
 
+    if args.jira_checklist:
+        print_jira_checklist()
+        sys.exit(0)
+
     status_data = determine_status(
         workdir=os.path.abspath(args.workdir),
         state_path=args.state_file,
         tfvars_path=args.tfvars_file,
         skip_auth_check=args.skip_auth_check,
+        skip_tools_check=args.skip_tools_check,
         deep=args.deep
     )
 

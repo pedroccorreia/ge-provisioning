@@ -60,25 +60,40 @@ output "jira_checklist" {
   description = "Atlassian Jira connector configuration and onboarding checklist per environment"
   value = {
     for k, v in local.environments : k => {
-      project_id            = google_project.projects[k].project_id
-      instance_uri          = coalesce(var.jira_config.instance_uri, "")
-      auth_type             = var.jira_auth_type
-      oauth_callback_url    = "https://vertexaisearch.cloud.google.com/console/oauth/default_oauth.html"
-      developer_console_url = "https://developer.atlassian.com/console/myapps/"
-      admin_console_url     = "https://admin.atlassian.com"
+      project_id                   = google_project.projects[k].project_id
+      instance_uri                 = coalesce(var.jira_config.instance_uri, "")
+      instance_id                  = local.effective_jira_instance_id
+      auth_type                    = local.effective_jira_auth_type
+      data_source_version          = local.effective_jira_version
+      oauth_ingestion_callback_url = "https://vertexaisearch.cloud.google.com/console/oauth/jira_oauth.html"
+      oauth_actions_callback_url   = "https://vertexaisearch.cloud.google.com/oauth-redirect"
+      developer_console_url        = "https://developer.atlassian.com/console/myapps/"
+      admin_console_url            = "https://admin.atlassian.com"
+      instance_id_help             = "Retrieve your Atlassian Cloud ID UUID via: curl -s https://<site>.atlassian.net/_edge/tenant_info | jq -r .cloudId"
       oauth_scopes = coalesce(var.jira_config.enable_actions, false) ? [
         "read:jira-work",
         "read:jira-user",
-        "offline_access",
-        "write:jira-work"
-        ] : [
+        "read:issue-details:jira",
+        "read:project:jira",
+        "read:jql:jira",
+        "read:board-scope:jira-software",
+        "write:jira-work",
+        "write:issue:jira",
+        "write:comment:jira",
+        "write:attachment:jira",
+        "offline_access"
+      ] : [
         "read:jira-work",
         "read:jira-user",
+        "read:issue-details:jira",
+        "read:project:jira",
+        "read:jql:jira",
+        "read:board-scope:jira-software",
         "offline_access"
       ]
       entities            = coalesce(var.jira_config.entities, ["project", "issue", "attachment", "comment", "worklog"])
       static_ip_addresses = contains(keys(google_discovery_engine_data_connector.connectors), "${k}-jira") ? google_discovery_engine_data_connector.connectors["${k}-jira"].static_ip_addresses : []
-      action_instructions = var.jira_auth_type == "oauth" ? "Create an Atlassian 3LO app at https://developer.atlassian.com/console/myapps/ with callback URL https://vertexaisearch.cloud.google.com/console/oauth/default_oauth.html, configure scopes, and provide client_id and client_secret." : "Generate an Atlassian API token at https://id.atlassian.com/manage-profile/security/api-tokens and supply user_account and api_token via TF_VAR_jira_auth."
+      action_instructions = contains(["OAUTH", "OAUTH_TWO_LEGGED"], local.effective_jira_auth_type) ? "Create an Atlassian 3LO app at https://developer.atlassian.com/console/myapps/ with callback URLs https://vertexaisearch.cloud.google.com/console/oauth/jira_oauth.html (Ingestion) and https://vertexaisearch.cloud.google.com/oauth-redirect (Actions), configure scopes, retrieve cloudId from https://<instance_uri>/_edge/tenant_info, and supply client_id, client_secret, instance_id, and refresh_token via TF_VAR_jira_auth." : "Generate an Atlassian API token at https://id.atlassian.com/manage-profile/security/api-tokens and supply user_account and api_token via TF_VAR_jira_auth."
     }
   }
 }

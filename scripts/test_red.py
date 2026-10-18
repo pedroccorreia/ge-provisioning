@@ -291,8 +291,11 @@ class TestStatusPhaseDetection(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.tools_patcher = patch("scripts.status.check_cli_tools", return_value=[])
+        self.tools_patcher.start()
 
     def tearDown(self):
+        self.tools_patcher.stop()
         self.temp_dir.cleanup()
 
     def _create_tfvars(self, data):
@@ -305,8 +308,20 @@ class TestStatusPhaseDetection(unittest.TestCase):
                     items = ", ".join(f'"{i}"' for i in v)
                     f.write(f'{k} = [{items}]\n')
                 elif isinstance(v, dict):
-                    entries = ", ".join(f'{mk} = "{mv}"' if isinstance(mv, str) else f'{mk} = {mv}' for mk, mv in v.items())
-                    f.write(f'{k} = {{ {entries} }}\n')
+                    entries = []
+                    for mk, mv in v.items():
+                        if isinstance(mv, list):
+                            items_str = ", ".join(f'"{i}"' for i in mv)
+                            entries.append(f'{mk} = [{items_str}]')
+                        elif isinstance(mv, str):
+                            entries.append(f'{mk} = "{mv}"')
+                        elif isinstance(mv, bool):
+                            entries.append(f'{mk} = {"true" if mv else "false"}')
+                        elif mv is None:
+                            entries.append(f'{mk} = null')
+                        else:
+                            entries.append(f'{mk} = {mv}')
+                    f.write(f'{k} = {{\n  {",\n  ".join(entries)}\n}}\n')
                 elif v is None:
                     f.write(f'{k} = null\n')
                 else:
@@ -680,6 +695,35 @@ class TestStatusPhaseDetection(unittest.TestCase):
         self.assertEqual(status["phase"], 3)
         self.assertEqual(status["phase_name"], "connectors_and_engines_apply")
 
+    def test_parse_tfvars_preserves_nested_jira_config_types(self):
+        """parse_tfvars must parse booleans, lists, and strings inside jira_config without clobbering."""
+        raw_tfvars = {
+            "customer_id": "testcust",
+            "customer_name": "Test Customer",
+            "company_domain": "testcust.org",
+            "workspace_customer_id": "C09999999",
+            "billing_account": "012345-6789AB-CDEF01",
+            "enable_jira_connector": True,
+            "jira_auth_type": "OAUTH",
+            "jira_config": {
+                "instance_uri": "https://custom.atlassian.net",
+                "instance_id": "11111111-2222-3333-4444-555555555555",
+                "static_ip_enabled": False,
+                "enable_actions": True,
+                "entities": ["project", "issue", "comment"]
+            }
+        }
+        tfvars_path = self._create_tfvars(raw_tfvars)
+        parsed = status_module.parse_tfvars(tfvars_path)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("jira_auth_type"), "OAUTH")
+        cfg = parsed.get("jira_config", {})
+        self.assertEqual(cfg.get("instance_uri"), "https://custom.atlassian.net")
+        self.assertEqual(cfg.get("instance_id"), "11111111-2222-3333-4444-555555555555")
+        self.assertIs(cfg.get("static_ip_enabled"), False)
+        self.assertIs(cfg.get("enable_actions"), True)
+        self.assertEqual(cfg.get("entities"), ["project", "issue", "comment"])
+
 
 class TestVerifyConnectors(unittest.TestCase):
     """Test cases for verify.py multi-entity and third-party data connector inspection."""
@@ -741,6 +785,15 @@ class TestVerifyConnectors(unittest.TestCase):
                     "errors": [{"code": 401, "message": "Unauthorized"}]
                 }
             return {}
+
+        mock_make_request.side_effect = side_effect
+
+        results = verify_module.check_data_connectors("test-proj", "global", "mock-token")
+        self.assertEqual(len(results), 1)
+        component, status, details = results[0]
+        self.assertEqual(status, "ERROR")
+        self.assertIn("Blocking: ALLOWLIST_STATIC_IP", details)
+        self.assertIn("Errors: 1", details)
 
     @patch("scripts.verify.make_request")
     def test_verify_check_data_connectors_warns_on_blocking_reasons_without_errors(self, mock_make_request):
