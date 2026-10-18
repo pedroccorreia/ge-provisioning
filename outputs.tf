@@ -82,7 +82,7 @@ output "jira_checklist" {
         "write:comment:jira",
         "write:attachment:jira",
         "offline_access"
-      ] : [
+        ] : [
         "read:jira-work",
         "read:jira-user",
         "read:issue-details:jira",

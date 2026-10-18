@@ -65,13 +65,13 @@ locals {
   workspace_environment_connectors = var.enable_connectors ? {
     for pair in setproduct(keys(local.environments), tolist(var.workspace_connectors)) :
     "${pair[0]}-${pair[1]}" => {
-      env_key                      = pair[0]
-      connector                    = pair[1]
-      data_source                  = pair[1]
-      data_source_version          = null
-      display_name                 = lookup(local.connector_meta, pair[1], { display_name = title(replace(pair[1], "_", " ")), service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).display_name
-      collection_id                = lookup(local.connector_meta, pair[1], { display_name = "", service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).collection
-      project_id                   = google_project.projects[pair[0]].project_id
+      env_key             = pair[0]
+      connector           = pair[1]
+      data_source         = pair[1]
+      data_source_version = null
+      display_name        = lookup(local.connector_meta, pair[1], { display_name = title(replace(pair[1], "_", " ")), service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).display_name
+      collection_id       = lookup(local.connector_meta, pair[1], { display_name = "", service = "", collection = "${replace(pair[1], "_", "-")}-collection" }).collection
+      project_id          = google_project.projects[pair[0]].project_id
       entities = [
         {
           entity_name = pair[1]
@@ -109,7 +109,7 @@ locals {
   )
 
   # Default data source version based on auth type: 3 for OAuth, 1 for Basic Auth (API Token)
-  default_jira_version = local.effective_jira_auth_type == "BASIC_AUTH" ? 1 : 3
+  default_jira_version   = local.effective_jira_auth_type == "BASIC_AUTH" ? 1 : 3
   effective_jira_version = coalesce(var.jira_config.data_source_version, local.default_jira_version)
 
   jira_entity_params = merge(
@@ -129,13 +129,13 @@ locals {
   jira_environment_connectors = var.enable_jira_connector ? {
     for env_key, env_val in local.environments :
     "${env_key}-jira" => {
-      env_key                      = env_key
-      connector                    = "jira"
-      data_source                  = coalesce(var.jira_config.data_source, "jira")
-      data_source_version          = local.effective_jira_version
-      display_name                 = "Atlassian Jira"
-      collection_id                = "jira-collection"
-      project_id                   = google_project.projects[env_key].project_id
+      env_key             = env_key
+      connector           = "jira"
+      data_source         = coalesce(var.jira_config.data_source, "jira")
+      data_source_version = local.effective_jira_version
+      display_name        = "Atlassian Jira"
+      collection_id       = "jira-collection"
+      project_id          = google_project.projects[env_key].project_id
       entities = [
         for e in coalesce(var.jira_config.entities, ["project", "issue", "attachment", "comment", "worklog"]) : {
           entity_name = e

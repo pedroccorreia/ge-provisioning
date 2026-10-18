@@ -1,11 +1,11 @@
 # This file is maintained automatically by "terraform init".
 # Manual edits may be lost in future updates.
 
-
 provider "registry.terraform.io/hashicorp/google" {
   version     = "7.46.1"
   constraints = "~> 7.41"
   hashes = [
+    "h1:Hgv4BX9846ucZ6XcEql0DPfACoXqlcLat9SjUAn7YLI=",
     "h1:oaPjmiPJz4rtO1CCcQ53YsY+Xr/vUEvmYRz10SGieuk=",
     "zh:2e0e513915988d80582f8db7ff18c6242b8f4fad977d428feb11bcbd30d8ba95",
     "zh:44ebe20d2a548c4318cc75497b7de0ded4bcb5867dbc9d7418f1941d5f6c5c2c",
@@ -26,6 +26,7 @@ provider "registry.terraform.io/hashicorp/google-beta" {
   version     = "7.46.1"
   constraints = "~> 7.41"
   hashes = [
+    "h1:8mMrYPmesQuhoiJau+0EJZWpNRTYsygcDs9KXTEeeUs=",
     "h1:SqnbR8yZBqKHskPkhvNUe3maRLKaDCK3ynyU8eJitJc=",
     "zh:0eeb073354857db03fac1952cef3b7353099cab8f20d770561ad3383cc9403b1",
     "zh:1c911cc686eefea84391b54b77584dfba951dd6991d582dcb5972961c4690ba1",
@@ -47,6 +48,7 @@ provider "registry.terraform.io/hashicorp/local" {
   constraints = ">= 2.0.0"
   hashes = [
     "h1:OZGJN0LSSat5QIxZPxDXtVr4XpHb2oG7cVKJhSqBFIE=",
+    "h1:qGLHCuYSus+uHNnoEL4SuJqOs5yrNOcB7gnuHoVqizo=",
     "zh:25606c7a5e308144fb627f6e31611bb52ff72bb9ae2d27af39673ab1a6b3c1bf",
     "zh:2568c4ef4dab31821f6f7040af0d1a2aa2b9455b8d9cc546598b791b8ada34cd",
     "zh:25ac210f136042047975896e5e11fe6012425301c826d6b7ce22a49f96a1e0e8",
