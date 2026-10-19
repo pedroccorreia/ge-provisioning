@@ -23,6 +23,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.14.8"
+          terraform_wrapper: false
 
       - name: Terraform Format Check
         run: terraform fmt -check -diff
@@ -34,4 +35,4 @@ jobs:
         run: terraform validate
 
       - name: Run Test Harness
-        run: python3 scripts/test_red.py
+        run: python3 -u scripts/test_red.py -v
