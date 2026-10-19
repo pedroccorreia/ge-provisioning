@@ -35,4 +35,20 @@ jobs:
         run: terraform validate
 
       - name: Run Test Harness
-        run: python3 -u scripts/test_red.py -v
+        id: test_harness
+        run: |
+          python3 -u scripts/test_red.py 2>&1 | tee test_run.log
+
+      - name: Publish Test Summary
+        if: always()
+        run: |
+          if [ -f test_run.log ]; then
+            echo "### Test Harness Log" >> $GITHUB_STEP_SUMMARY
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            cat test_run.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Also emit failed lines as GitHub annotations so they appear in API/UI
+            grep -E '(FAIL|ERROR|Error|Traceback|Exception)' test_run.log | head -n 10 | while IFS= read -r line; do
+              echo "::error title=TestFailure::$line"
+            done
+          fi
