@@ -1,8 +1,8 @@
 ---
-description: Run staged Gemini Enterprise deployment via status.py and RUNBOOK.md
+description: Run staged Prism Gemini Enterprise deployment via status.py and RUNBOOK.md
 ---
 
-# Deploy Gemini Enterprise
+# Deploy Prism (Gemini Enterprise)
 
 1. Run `make status --json` to detect the live deployment phase and identify blockers.
 2. Consult [AGENTS.md](AGENTS.md) for rules of engagement and [RUNBOOK.md](RUNBOOK.md) for the active stage.

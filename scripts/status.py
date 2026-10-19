@@ -422,7 +422,7 @@ def print_human_table(status_data):
     blockers = status_data["blockers"]
 
     print("\n================================================================================")
-    print(" GEMINI ENTERPRISE PROVISIONING STATUS")
+    print(" ═══╬─╱╲──✦  PRISM — GEMINI ENTERPRISE PROVISIONING STATUS")
     print("================================================================================")
     print(f" Current Phase : Stage {phase} — {phase_name.replace('_', ' ').title()}")
     print(f" Phase Owner   : {owner.upper()}")
@@ -519,7 +519,7 @@ def print_jira_checklist():
         if uri and "example.atlassian.net" not in uri and uri.startswith("http"):
             try:
                 tenant_url = f"{uri}/_edge/tenant_info"
-                req = urllib.request.Request(tenant_url, headers={"User-Agent": "GE-Provisioning/1.0"})
+                req = urllib.request.Request(tenant_url, headers={"User-Agent": "Prism-GE-Provisioning/1.0"})
                 with urllib.request.urlopen(req, timeout=3) as resp:
                     t_data = json.loads(resp.read().decode("utf-8"))
                     cloud_id = t_data.get("cloudId")

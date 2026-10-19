@@ -1,6 +1,6 @@
-# Agent Protocol — Gemini Enterprise Provisioning
+# Agent Protocol — Prism (Gemini Enterprise Provisioning)
 
-Autonomous agent protocol for provisioning Gemini Enterprise across customer environments.
+Autonomous agent protocol for Prism: provisioning Gemini Enterprise across customer environments.
 
 ## Start Here
 Execute `make status --json`. Act on `next_action`. Reference the matching stage in [RUNBOOK.md](RUNBOOK.md).
@@ -87,6 +87,7 @@ Run `gcloud auth application-default login` and `gcloud auth login` with a custo
 | `distributeLicenseConfig: Insufficient` | Billing pool out of seats | Increase seats on Billing Account |
 
 ## Repository Map
+- `assets/`: Vector SVGs (`prism-banner.svg`, `prism-logo.svg`, `prism-icon.svg`) and high-res brand artwork.
 - `Makefile`: Unified command surface (`make status`, `make plan-*`, `make apply-*`).
 - `RUNBOOK.md`: Complete human and agent deployment instructions.
 - `main.tf`, `variables.tf`, `outputs.tf`: Core Terraform configuration.

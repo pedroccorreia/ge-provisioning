@@ -480,7 +480,7 @@ def main():
     # If --distribute is requested
     if args.distribute:
         print(f"\n=======================================================")
-        print(f" Distributing Subscription Seats from Billing Account")
+        print(f" Prism: Distributing Subscription Seats from Billing Pool")
         print(f" Billing Account : {billing_account}")
         print(f" License Config  : {license_config_id}")
         print(f"=======================================================\n")

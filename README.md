@@ -1,6 +1,26 @@
-# Gemini Enterprise Customer Provisioning IaC
+<div align="center">
+  <img src="assets/prism-banner.svg" alt="Prism — Gemini Enterprise Provisioning Engine" width="100%" />
+</div>
 
-This repository contains production-grade Terraform Infrastructure as Code (IaC) and automation tooling to provision and configure Gemini Enterprise (Vertex AI Search) with Google Workspace and Atlassian Jira connectors.
+<p align="center">
+  <a href="RUNBOOK.md"><img src="https://img.shields.io/badge/Runbook-Authoritative_Stages-38BDF8?style=flat-square&logo=gitbook&logoColor=white" alt="Runbook" /></a>
+  <a href="AGENTS.md"><img src="https://img.shields.io/badge/Agent_Protocol-Guarded_Stages_0--5-818CF8?style=flat-square&logo=robot&logoColor=white" alt="Agent Protocol" /></a>
+  <a href="https://cloud.google.com/vertex-ai-search-and-conversation"><img src="https://img.shields.io/badge/Vertex_AI_Search-Gemini_Enterprise-4285F4?style=flat-square&logo=googlecloud&logoColor=white" alt="Vertex AI Search" /></a>
+  <a href="https://www.terraform.io/"><img src="https://img.shields.io/badge/Terraform-%3E=_1.5.0-7B42BC?style=flat-square&logo=terraform&logoColor=white" alt="Terraform" /></a>
+  <a href="assets/prism-logo.svg"><img src="https://img.shields.io/badge/Brand-Prism_v1-00F5D4?style=flat-square&logo=sparkles&logoColor=white" alt="Brand" /></a>
+</p>
+
+# Prism — Gemini Enterprise Customer Provisioning IaC
+
+> **Refracting enterprise knowledge—Google Workspace, Atlassian Jira, and Cloud Identity—into one governed Gemini Enterprise assistant.**
+
+**Prism** is a production-grade Terraform Infrastructure as Code (IaC) and autonomous agent orchestration engine that provisions, connects, and licenses **Google Gemini Enterprise (Vertex AI Search)** across isolated customer environments (`non-prod`, `prod`, `dev`, `pilot`).
+
+### Optical Convergence Architecture
+Just as an optical prism unifies disparate wavelengths into a single beam, Prism converges five distinct enterprise data streams through five guarded deployment stages:
+- **5 Enterprise Input Rays:** Gmail, Google Calendar, Google Drive, Google Chat, and Atlassian Jira.
+- **The Prism (IaC Engine):** Staged Terraform foundation, Domain-Wide Delegation (DWD), `GSUITE` location ACLs, and non-destructive plan guards (`plan_guard.py`).
+- **The Gemini Apex Spark:** Unified Intranet Search Engine and Governed Enterprise Assistant (`google_discovery_engine_assistant`).
 
 It deploys:
 - **Dedicated GCP Projects** per configurable customer environment (e.g. `non-prod`, `prod`, `dev`, `pilot`).
@@ -182,6 +202,10 @@ make test              # Run unit tests and Terraform validation
 ## File Structure
 
 ```
+├── assets/
+│   ├── prism-banner.svg             # 1200x320 hero vector banner
+│   ├── prism-icon.svg               # 64x64 compact vector icon
+│   └── prism-logo.svg               # 512x512 square vector logo
 ├── .agent/
 │   └── workflows/
 │       └── deploy.md                # Antigravity workflow

@@ -114,7 +114,7 @@ def guard_plan(plan_path=None, json_file=None, allow_destroy=None):
 
     if destructive:
         print("\n================================================================================")
-        print(" [PLAN GUARD] DESTRUCTIVE CHANGES DETECTED")
+        print(" [PRISM PLAN GUARD] DESTRUCTIVE CHANGES DETECTED")
         print("================================================================================")
         for item in destructive:
             print(f"  • {item['action_desc'].upper():<8} : {item['address']} ({item['type']})")

@@ -12,7 +12,7 @@ SA_EMAIL="${SA_NAME}@${BOOTSTRAP_PROJECT}.iam.gserviceaccount.com"
 echo "=== Stage 1: Creating Provisioner Service Account in ${BOOTSTRAP_PROJECT} ==="
 if ! gcloud iam service-accounts describe "${SA_EMAIL}" --project "${BOOTSTRAP_PROJECT}" &>/dev/null; then
   gcloud iam service-accounts create "${SA_NAME}" \
-    --display-name="Gemini IaC Provisioner" \
+    --display-name="Prism — Gemini IaC Provisioner" \
     --project "${BOOTSTRAP_PROJECT}"
   echo "Service account created: ${SA_EMAIL}"
 else

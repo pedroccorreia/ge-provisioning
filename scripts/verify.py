@@ -302,7 +302,7 @@ def main():
     token = get_access_token()
 
     if not args.json:
-        print("\nStarting Gemini Enterprise Post-Deployment Verification...")
+        print("\nStarting Prism — Gemini Enterprise Post-Deployment Verification...")
 
     start_time = time.time()
     poll_interval = 15

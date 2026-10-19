@@ -1,6 +1,6 @@
-# Gemini Enterprise Provisioning Runbook
+# Prism — Gemini Enterprise Provisioning Runbook
 
-This runbook defines the authoritative, staged procedure for provisioning Gemini Enterprise (Vertex AI Search) with Google Workspace across customer environments.
+This runbook defines the authoritative, staged procedure for **Prism**: provisioning Gemini Enterprise (Vertex AI Search) with Google Workspace and Atlassian Jira connectors across customer environments.
 
 It serves both **human operators** and **autonomous AI agents** ([AGENTS.md](AGENTS.md)). Every stage contains machine-checkable preconditions, execution targets via `make`, success criteria, failure handling, and checklist items.
 

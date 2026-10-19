@@ -3,6 +3,11 @@
 WAIT ?= 15m
 
 help:
+	@echo ""
+	@echo "  ═══╗  ╱╲"
+	@echo "  ═══╬─╱  ╲──✦   P R I S M   │ Gemini Enterprise Provisioning Engine"
+	@echo "  ═══╝╱____╲     v1.0        │ Workspace · Jira · Identity · Licensing"
+	@echo ""
 	@echo "Available targets:"
 	@echo "  status            - Check deployment status & live phase"
 	@echo "  plan-foundation   - Generate Stage 1 Foundation plan with plan guard"
